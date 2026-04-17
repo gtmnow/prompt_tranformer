@@ -3,8 +3,11 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from app.schemas.transform import TransformMetadata, TransformPromptRequest, TransformPromptResponse
+from app.services.compliance_checks import ComplianceCheckService
 from app.services.llm_policy import LLMPolicyService
+from app.services.pii_checks import PIICheckService
 from app.services.profile_resolver import ProfileResolver
+from app.services.prompt_requirements import PromptRequirementService
 from app.services.request_logger import RequestLogger
 from app.services.task_inference import TaskInferenceService
 
@@ -27,23 +30,60 @@ class TransformerEngine:
         self.profile_resolver = ProfileResolver(db_session)
         self.task_inference = TaskInferenceService()
         self.llm_policy = LLMPolicyService()
+        self.prompt_requirements = PromptRequirementService()
+        self.compliance_checks = ComplianceCheckService()
+        self.pii_checks = PIICheckService()
         self.request_logger = RequestLogger(db_session)
 
     def transform(self, payload: TransformPromptRequest) -> TransformPromptResponse:
         persona = self.profile_resolver.resolve(payload.user_id, payload.summary_type)
+        effective_enforcement_level = payload.enforcement_level or persona.prompt_enforcement_level
         task_type, task_rules = self.task_inference.infer(payload.raw_prompt)
         policy = self.llm_policy.resolve(
             provider=payload.target_llm.provider,
             model=payload.target_llm.model,
         )
-
-        transformed_prompt, persona_rules, model_rules = self._build_prompt(
+        conversation, enforcement_rules, coaching_tip = self.prompt_requirements.evaluate(
+            conversation_id=payload.conversation_id,
             raw_prompt=payload.raw_prompt,
-            task_type=task_type,
-            persona=persona.values,
-            model_policy=policy.policy,
+            conversation=payload.conversation,
+            enforcement_level=effective_enforcement_level,
         )
-        rules_applied = task_rules + persona_rules + model_rules
+
+        findings = []
+        if persona.compliance_check_enabled:
+            findings.extend(self.compliance_checks.evaluate(payload.raw_prompt))
+            enforcement_rules.append("check:compliance:enabled")
+        if persona.pii_check_enabled:
+            findings.extend(self.pii_checks.evaluate(payload.raw_prompt))
+            enforcement_rules.append("check:pii:enabled")
+        if payload.enforcement_level is not None:
+            enforcement_rules.append("policy:enforcement:override")
+
+        blocking_findings = [finding for finding in findings if finding.severity == "high"]
+        transformed_prompt = None
+        result_type = "transformed"
+        blocking_message = None
+
+        if blocking_findings:
+            result_type = "blocked"
+            conversation.enforcement.status = "blocked"
+            blocking_message = blocking_findings[0].message
+            persona_rules = []
+            model_rules = []
+        elif conversation.enforcement.status == "needs_coaching":
+            result_type = "coaching"
+            persona_rules = []
+            model_rules = []
+        else:
+            transformed_prompt, persona_rules, model_rules = self._build_prompt(
+                raw_prompt=payload.raw_prompt,
+                task_type=task_type,
+                persona=persona.values,
+                model_policy=policy.policy,
+            )
+
+        rules_applied = task_rules + enforcement_rules + persona_rules + model_rules
 
         metadata = TransformMetadata(
             persona_source=persona.source,
@@ -57,23 +97,38 @@ class TransformerEngine:
         self.request_logger.log(
             {
                 "session_id": payload.session_id,
+                "conversation_id": payload.conversation_id,
                 "user_id": payload.user_id,
                 "raw_prompt": payload.raw_prompt,
                 "transformed_prompt": transformed_prompt,
                 "task_type": task_type,
+                "result_type": result_type,
+                "coaching_tip": coaching_tip,
+                "blocking_message": blocking_message,
                 "target_provider": payload.target_llm.provider,
                 "target_model": policy.resolved_model,
                 "persona_source": persona.source,
                 "used_fallback_model": policy.used_fallback_model,
+                "enforcement_level": effective_enforcement_level,
+                "compliance_check_enabled": persona.compliance_check_enabled,
+                "pii_check_enabled": persona.pii_check_enabled,
+                "conversation_json": conversation.model_dump(),
+                "findings_json": [finding.model_dump() for finding in findings],
                 "metadata_json": metadata.model_dump(),
             }
         )
 
         return TransformPromptResponse(
             session_id=payload.session_id,
+            conversation_id=payload.conversation_id,
             user_id=payload.user_id,
-            transformed_prompt=transformed_prompt,
+            result_type=result_type,
             task_type=task_type,
+            transformed_prompt=transformed_prompt,
+            coaching_tip=coaching_tip,
+            blocking_message=blocking_message,
+            conversation=conversation,
+            findings=findings,
             metadata=metadata,
         )
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hmac
+from typing import Optional
 
 from fastapi import Header, HTTPException, status
 
@@ -8,8 +9,8 @@ from app.core.config import get_settings
 
 
 def require_service_auth(
-    authorization: str | None = Header(default=None),
-    x_client_id: str | None = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+    x_client_id: Optional[str] = Header(default=None),
 ) -> str:
     settings = get_settings()
 
@@ -39,7 +40,7 @@ def require_service_auth(
     return x_client_id
 
 
-def _read_bearer_token(authorization: str | None) -> str | None:
+def _read_bearer_token(authorization: Optional[str]) -> Optional[str]:
     if not authorization:
         return None
 

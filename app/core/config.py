@@ -1,6 +1,6 @@
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -16,11 +16,20 @@ class Settings(BaseSettings):
     require_service_auth: bool = False
     prompt_transformer_api_key: str = ""
     allowed_client_ids_raw: str = Field(default="hermanprompt", alias="ALLOWED_CLIENT_IDS")
+    structure_evaluator_enabled: bool = False
+    structure_evaluator_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("STRUCTURE_EVALUATOR_API_KEY", "OPENAI_API_KEY"),
+    )
+    structure_evaluator_base_url: str = "https://api.openai.com/v1"
+    structure_evaluator_model: str = "gpt-4.1-mini"
+    structure_evaluator_timeout_seconds: float = 15.0
 
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        extra="ignore",
     )
 
     @property

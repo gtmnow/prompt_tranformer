@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, String, func
+from sqlalchemy import Boolean, DateTime, Float, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -15,6 +15,9 @@ class ProfileMixin:
     ambiguity_reduction: Mapped[float] = mapped_column(Float, nullable=False)
     exploration_level: Mapped[float] = mapped_column(Float, nullable=False)
     context_loading: Mapped[float] = mapped_column(Float, nullable=False)
+    prompt_enforcement_level: Mapped[str] = mapped_column(String(20), nullable=False, default="none")
+    compliance_check_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    pii_check_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     profile_version: Mapped[str] = mapped_column(String(50), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

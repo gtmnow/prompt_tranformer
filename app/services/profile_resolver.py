@@ -25,6 +25,9 @@ class ResolvedPersona:
     values: dict[str, float]
     source: str
     profile_version: str
+    prompt_enforcement_level: str
+    compliance_check_enabled: bool
+    pii_check_enabled: bool
 
 
 class ProfileResolver:
@@ -42,6 +45,9 @@ class ProfileResolver:
                 values={field: float(getattr(db_profile, field)) for field in PROFILE_FIELDS},
                 source="db_profile",
                 profile_version=db_profile.profile_version,
+                prompt_enforcement_level=db_profile.prompt_enforcement_level,
+                compliance_check_enabled=bool(db_profile.compliance_check_enabled),
+                pii_check_enabled=bool(db_profile.pii_check_enabled),
             )
 
         return self._generic_default()
@@ -56,6 +62,9 @@ class ProfileResolver:
             values=values,
             source="summary_override",
             profile_version=f"summary_type_{summary_type}",
+            prompt_enforcement_level="none",
+            compliance_check_enabled=False,
+            pii_check_enabled=False,
         )
 
     def _generic_default(self) -> ResolvedPersona:
@@ -65,4 +74,7 @@ class ProfileResolver:
             values=values,
             source="generic_default",
             profile_version="generic_default",
+            prompt_enforcement_level="none",
+            compliance_check_enabled=False,
+            pii_check_enabled=False,
         )

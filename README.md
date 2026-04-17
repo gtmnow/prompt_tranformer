@@ -54,9 +54,10 @@ tests/         API tests
 3. Resolve persona from `summary_type`, `final_profile`, or generic default
 4. Infer task type from deterministic rules
 5. Resolve model policy from local YAML
-6. Build the transformed prompt deterministically
-7. Optionally log the request
-8. Return transformed prompt plus metadata
+6. Evaluate conversation enforcement plus optional compliance and PII checks
+7. Build the transformed prompt only when the request is allowed to proceed
+8. Optionally log the request and decision result
+9. Return either a transformed prompt, coaching guidance, or a blocked result
 
 See [docs/architecture.md](./docs/architecture.md) for the detailed flow and ownership boundaries.
 
@@ -121,6 +122,7 @@ Example request:
 ```json
 {
   "session_id": "sess_123",
+  "conversation_id": "conv_123",
   "user_id": "user_1",
   "raw_prompt": "Explain this concept simply",
   "target_llm": {
@@ -135,9 +137,13 @@ Example successful response:
 ```json
 {
   "session_id": "sess_123",
+  "conversation_id": "conv_123",
   "user_id": "user_1",
+  "result_type": "transformed",
   "transformed_prompt": "Explain the topic according to the guidance below.\nStart with the direct answer before supporting detail.\n...",
   "task_type": "explanation",
+  "conversation": null,
+  "findings": [],
   "metadata": {
     "persona_source": "db_profile",
     "rules_applied": [
@@ -152,6 +158,10 @@ Example successful response:
 ```
 
 See [docs/api_contract.md](./docs/api_contract.md) for request/response rules and expected behaviors.
+
+Planned feature work for conversation-level prompt enforcement, compliance checks, and PII checks is documented in [docs/prompt_enforcement_implementation_spec.md](./docs/prompt_enforcement_implementation_spec.md).
+
+The current runtime now supports conversation-level enforcement outcomes through `result_type` as part of the API contract.
 
 ## Seeded users
 
@@ -210,3 +220,4 @@ See [docs/operations.md](./docs/operations.md) for deployment and troubleshootin
 - [docs/architecture.md](./docs/architecture.md)
 - [docs/api_contract.md](./docs/api_contract.md)
 - [docs/operations.md](./docs/operations.md)
+- [docs/prompt_enforcement_implementation_spec.md](./docs/prompt_enforcement_implementation_spec.md)

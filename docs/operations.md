@@ -19,6 +19,15 @@ Startup/deployment helpers:
 - `RAILWAY_SEED_ON_START`
 - `HOST`
 
+Optional structure evaluator settings:
+
+- `STRUCTURE_EVALUATOR_ENABLED`
+- `STRUCTURE_EVALUATOR_API_KEY`
+- `OPENAI_API_KEY`
+- `STRUCTURE_EVALUATOR_BASE_URL`
+- `STRUCTURE_EVALUATOR_MODEL`
+- `STRUCTURE_EVALUATOR_TIMEOUT_SECONDS`
+
 ## Local development
 
 1. Set `.env`
@@ -65,6 +74,7 @@ curl -X POST "https://<service-domain>/api/transform_prompt" \
   -H "Authorization: Bearer <PROMPT_TRANSFORMER_API_KEY>" \
   -d '{
     "session_id": "sess_123",
+    "conversation_id": "conv_123",
     "user_id": "user_1",
     "raw_prompt": "Explain this concept simply",
     "target_llm": {
@@ -77,7 +87,18 @@ curl -X POST "https://<service-domain>/api/transform_prompt" \
 Expected behavior for `user_1`:
 
 - `persona_source` should be `db_profile`
-- `profile_version` should be `v1`
+- `result_type` should be present in the JSON response
+- `conversation_id` should echo back `conv_123`
+
+## Prompt enforcement deploy checklist
+
+1. Confirm Railway is deploying the repo on `main`
+2. Keep `RAILWAY_AUTO_MIGRATE=true` so `20260417_0002_prompt_enforcement_fields.py` applies on boot
+3. Leave `RAILWAY_SEED_ON_START=false` unless you intentionally want to reseed demo users
+4. If using LLM-based prompt evaluation, set `STRUCTURE_EVALUATOR_ENABLED=true`
+5. Set either `STRUCTURE_EVALUATOR_API_KEY` or `OPENAI_API_KEY`
+6. Optionally set `STRUCTURE_EVALUATOR_MODEL=gpt-4.1-mini`
+7. After deploy, verify `POST /api/transform_prompt` returns `coaching` for a minimal `full`-enforcement prompt such as `tell me a joke`
 
 ## Troubleshooting
 

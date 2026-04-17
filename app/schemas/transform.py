@@ -1,6 +1,6 @@
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, model_validator, field_validator
 
 
 class TargetLLM(BaseModel):
@@ -8,12 +8,48 @@ class TargetLLM(BaseModel):
     model: str = Field(min_length=1, max_length=100)
 
 
+RequirementStatus = Literal["user_provided", "derived", "missing"]
+EnforcementLevel = Literal["none", "low", "moderate", "full"]
+EnforcementStatus = Literal["not_evaluated", "passes", "needs_coaching", "blocked"]
+ResultType = Literal["transformed", "coaching", "blocked"]
+FindingType = Literal["compliance", "pii"]
+FindingSeverity = Literal["low", "medium", "high"]
+
+
+class ConversationRequirement(BaseModel):
+    value: Optional[str] = Field(default=None)
+    status: RequirementStatus
+
+
+class ConversationEnforcement(BaseModel):
+    level: EnforcementLevel
+    status: EnforcementStatus
+    missing_fields: list[str] = Field(default_factory=list)
+    last_evaluated_at: Optional[str] = Field(default=None)
+
+
+class ConversationState(BaseModel):
+    conversation_id: str = Field(min_length=1, max_length=255)
+    requirements: dict[str, ConversationRequirement]
+    enforcement: ConversationEnforcement
+
+
+class Finding(BaseModel):
+    type: FindingType
+    severity: FindingSeverity
+    code: str = Field(min_length=1, max_length=100)
+    message: str = Field(min_length=1)
+
+
 class TransformPromptRequest(BaseModel):
     session_id: str = Field(min_length=1, max_length=255)
+    conversation_id: str = Field(min_length=1, max_length=255)
     user_id: str = Field(min_length=1, max_length=255)
     raw_prompt: str = Field(min_length=1)
     target_llm: TargetLLM
+    conversation: Optional[ConversationState] = Field(default=None)
     summary_type: Optional[int] = Field(default=None)
+    enforcement_level: Optional[EnforcementLevel] = Field(default=None)
 
     @field_validator("summary_type")
     @classmethod
@@ -23,6 +59,12 @@ class TransformPromptRequest(BaseModel):
         if 1 <= value <= 9:
             return value
         raise ValueError("summary_type must be between 1 and 9")
+
+    @model_validator(mode="after")
+    def validate_conversation_id_match(self) -> "TransformPromptRequest":
+        if self.conversation is not None and self.conversation.conversation_id != self.conversation_id:
+            raise ValueError("conversation.conversation_id must match conversation_id")
+        return self
 
 
 class TransformMetadata(BaseModel):
@@ -36,7 +78,13 @@ class TransformMetadata(BaseModel):
 
 class TransformPromptResponse(BaseModel):
     session_id: str
+    conversation_id: str
     user_id: str
-    transformed_prompt: str
-    task_type: str
+    result_type: ResultType
+    task_type: Optional[str] = None
+    transformed_prompt: Optional[str] = None
+    coaching_tip: Optional[str] = None
+    blocking_message: Optional[str] = None
+    conversation: Optional[ConversationState] = None
+    findings: list[Finding] = Field(default_factory=list)
     metadata: TransformMetadata

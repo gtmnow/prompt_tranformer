@@ -22,9 +22,11 @@ The service does not call any LLMs and does not generate or update user profiles
    - generic default
 5. `TaskInferenceService` classifies the prompt from local keywords/phrases.
 6. `LLMPolicyService` resolves the target model policy or fallback model.
-7. `TransformerEngine._build_prompt()` constructs the transformed prompt.
-8. `RequestLogger` optionally persists a debug log row.
-9. The API returns the transformed prompt, task type, and metadata.
+7. `PromptRequirementService` merges conversation state, derives missing fields, and evaluates enforcement.
+8. Optional compliance and PII check services add findings.
+9. `TransformerEngine._build_prompt()` constructs the transformed prompt only when the request is allowed to proceed.
+10. `RequestLogger` optionally persists a debug log row.
+11. The API returns a typed result containing either a transformed prompt, coaching guidance, or a blocked outcome.
 
 ## Design principles
 
@@ -77,8 +79,14 @@ The service does not call any LLMs and does not generate or update user profiles
   - deterministic task detection
 - `app/services/llm_policy.py`
   - model policy lookup with fallback
+- `app/services/prompt_requirements.py`
+  - conversation-state merging, derivation, and enforcement evaluation
+- `app/services/compliance_checks.py`
+  - deterministic compliance findings
+- `app/services/pii_checks.py`
+  - deterministic PII findings
 - `app/services/transformer_engine.py`
-  - orchestration and prompt construction
+  - orchestration, gating, and prompt construction
 - `app/services/request_logger.py`
   - optional request persistence
 
@@ -122,3 +130,9 @@ Changes that need care:
 - changing rule file structure
 - modifying the precedence order of task/persona/model rules
 - adding new persistence behavior during request handling
+
+## Conversation Enforcement
+
+Conversation-level prompt enforcement, compliance checks, and PII checks are now part of the runtime path.
+
+See [prompt_enforcement_implementation_spec.md](./prompt_enforcement_implementation_spec.md) for the implementation design, API shape changes, profile changes, and UI integration contract.

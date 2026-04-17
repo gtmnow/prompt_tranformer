@@ -14,6 +14,11 @@ Returns:
 
 ### `POST /api/transform_prompt`
 
+Required headers when service auth is enabled:
+
+- `Authorization: Bearer <PROMPT_TRANSFORMER_API_KEY>`
+- `X-Client-Id: <approved-client-id>`
+
 Request body:
 
 ```json
@@ -90,6 +95,8 @@ Request body:
 
 - invalid payload fields: `400`
 - invalid `summary_type`: `400`
+- missing client identity or missing service credentials: `401`
+- invalid service credentials: `403`
 - database unavailable: `503`
 - user not found: no error, falls back to `generic_default`
 - unknown model: no error, falls back to the configured provider/default model policy

@@ -111,6 +111,11 @@ Health endpoint:
 
 - `GET /api/health`
 
+Authentication headers for production/shared-service use:
+
+- `Authorization: Bearer <PROMPT_TRANSFORMER_API_KEY>`
+- `X-Client-Id: <approved-client-id>`
+
 Example request:
 
 ```json
@@ -150,12 +155,17 @@ See [docs/api_contract.md](./docs/api_contract.md) for request/response rules an
 
 ## Seeded users
 
-The MVP ships with four sample users in the database:
+The MVP ships with nine sample users in the database. Each one mirrors the default persona values for the matching summary personality type:
 
-- `user_1`
-- `user_2`
-- `user_3`
-- `user_4`
+- `user_1` -> summary type `1`
+- `user_2` -> summary type `2`
+- `user_3` -> summary type `3`
+- `user_4` -> summary type `4`
+- `user_5` -> summary type `5`
+- `user_6` -> summary type `6`
+- `user_7` -> summary type `7`
+- `user_8` -> summary type `8`
+- `user_9` -> summary type `9`
 
 `user_missing` is intentionally absent and should exercise generic fallback behavior.
 
@@ -175,6 +185,9 @@ DATABASE_URL=<railway postgres url in SQLAlchemy form>
 APP_ENV=production
 LOG_LEVEL=INFO
 PORT=8000
+REQUIRE_SERVICE_AUTH=true
+PROMPT_TRANSFORMER_API_KEY=<shared service credential>
+ALLOWED_CLIENT_IDS=hermanprompt
 ENABLE_REQUEST_LOGGING=false
 RAILWAY_AUTO_MIGRATE=true
 RAILWAY_SEED_ON_START=true
@@ -185,6 +198,7 @@ Notes:
 
 - `DATABASE_URL` must be set on the app service, not only on the Postgres service.
 - `DATABASE_URL` should use `postgresql+psycopg://...`, not raw `postgresql://...`.
+- When `REQUIRE_SERVICE_AUTH=true`, callers must send both `Authorization: Bearer <PROMPT_TRANSFORMER_API_KEY>` and an allowed `X-Client-Id`.
 - `RAILWAY_AUTO_MIGRATE=true` runs `alembic upgrade head` during startup.
 - `RAILWAY_SEED_ON_START=true` is useful for the first MVP deploy. After the sample profiles are loaded, switch it to `false`.
 - `railway.json` starts the service through `python3 -m app.run_server`, which bootstraps the database and then launches Uvicorn.

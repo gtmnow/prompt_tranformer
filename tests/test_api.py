@@ -3,6 +3,12 @@ from app.models.profile import FinalProfile
 from app.db.session import get_db
 
 
+AUTH_HEADERS = {
+    "Authorization": "Bearer test-transformer-key",
+    "X-Client-Id": "hermanprompt",
+}
+
+
 def _seed_final_profiles(client) -> None:
     db = next(client.app.dependency_overrides[get_db]())
     try:
@@ -18,6 +24,7 @@ def test_transform_uses_db_profile(client) -> None:
 
     response = client.post(
         "/api/transform_prompt",
+        headers=AUTH_HEADERS,
         json={
             "session_id": "sess_123",
             "user_id": "user_1",
@@ -36,6 +43,7 @@ def test_transform_uses_db_profile(client) -> None:
 def test_transform_uses_summary_override(client) -> None:
     response = client.post(
         "/api/transform_prompt",
+        headers=AUTH_HEADERS,
         json={
             "session_id": "sess_456",
             "user_id": "user_missing",
@@ -54,6 +62,7 @@ def test_transform_uses_summary_override(client) -> None:
 def test_transform_falls_back_to_generic_default(client) -> None:
     response = client.post(
         "/api/transform_prompt",
+        headers=AUTH_HEADERS,
         json={
             "session_id": "sess_789",
             "user_id": "user_missing",
@@ -72,6 +81,7 @@ def test_transform_falls_back_to_generic_default(client) -> None:
 def test_invalid_summary_type_returns_400(client) -> None:
     response = client.post(
         "/api/transform_prompt",
+        headers=AUTH_HEADERS,
         json={
             "session_id": "sess_999",
             "user_id": "user_1",
@@ -82,3 +92,37 @@ def test_invalid_summary_type_returns_400(client) -> None:
     )
 
     assert response.status_code == 400
+
+
+def test_transform_requires_service_credentials(client) -> None:
+    response = client.post(
+        "/api/transform_prompt",
+        json={
+            "session_id": "sess_missing_auth",
+            "user_id": "user_1",
+            "raw_prompt": "Explain this concept simply",
+            "target_llm": {"provider": "openai", "model": "gpt-4.1"},
+        },
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid client identity."
+
+
+def test_transform_rejects_invalid_service_credentials(client) -> None:
+    response = client.post(
+        "/api/transform_prompt",
+        headers={
+            "Authorization": "Bearer wrong-key",
+            "X-Client-Id": "hermanprompt",
+        },
+        json={
+            "session_id": "sess_wrong_auth",
+            "user_id": "user_1",
+            "raw_prompt": "Explain this concept simply",
+            "target_llm": {"provider": "openai", "model": "gpt-4.1"},
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Invalid service credentials."

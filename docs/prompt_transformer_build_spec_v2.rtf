@@ -58,7 +58,10 @@ The service is:\
 \f3\b stateless (except DB lookup + optional logging)
 \f1\b0 \
 	\'95	
-\f3\b does NOT call LLMs
+\f3\b prompt construction does NOT call LLMs
+\f1\b0 \
+	\'95	
+\f3\b may call a small evaluator model for structure extraction and planned hybrid scoring
 \f1\b0 \
 \pard\tx560\tx1120\tx1680\tx2240\tx2800\tx3360\tx3920\tx4480\tx5040\tx5600\tx6160\tx6720\pardirnatural\partightenfactor0
 
@@ -87,6 +90,48 @@ It does NOT:\
 	\'95	manage conversations\
 	\'95	update profiles\
 	\'95	perform learning\
+\pard\tx560\tx1120\tx1680\tx2240\tx2800\tx3360\tx3920\tx4480\tx5040\tx5600\tx6160\tx6720\pardirnatural\partightenfactor0
+
+\f2\fs24 \cf0 \
+\uc0\u11835 \
+\pard\tx560\tx1120\tx1680\tx2240\tx2800\tx3360\tx3920\tx4480\tx5040\tx5600\tx6160\tx6720\sl324\slmult1\pardirnatural\partightenfactor0
+
+\f1\fs32 \cf2 \
+\pard\tx560\tx1120\tx1680\tx2240\tx2800\tx3360\tx3920\tx4480\tx5040\tx5600\tx6160\tx6720\sl324\slmult1\pardirnatural\partightenfactor0
+
+\f0\b\fs38 \cf2 2A. Scoring Methodology
+\f1\b0\fs32 \
+\
+Prompt scoring is transformer-owned analytics.\
+\
+Current scoring model:\
+\pard\tqr\tx100\tx260\li260\fi-260\sl324\slmult1\sb240\partightenfactor0
+\cf2 	\'95	classify 
+\f4 who
+\f1 , 
+\f4 task
+\f1 , 
+\f4 context
+\f1 , and 
+\f4 output
+\f1  as 
+\f4 present
+\f1 , 
+\f4 derived
+\f1 , or 
+\f4 missing
+\f1 \
+	\'95	load score weights from 
+\f4 app/rules/prompt_scoring.yaml
+\f1 \
+	\'95	persist conversation score rollups in the transformer database\
+\
+Planned hybrid scoring model:\
+	\'95	compute a heuristic baseline score\
+	\'95	compute an internal LLM-evaluated semantic score for the four dimensions\
+	\'95	fuse heuristic + LLM judgments into one final score\
+	\'95	expose the fused score to downstream UIs through the score read endpoint\
+\pard\tx560\tx1120\tx1680\tx2240\tx2800\tx3360\tx3920\tx4480\tx5040\tx5600\tx6160\tx6720\pardirnatural\partightenfactor0
 \pard\tx560\tx1120\tx1680\tx2240\tx2800\tx3360\tx3920\tx4480\tx5040\tx5600\tx6160\tx6720\pardirnatural\partightenfactor0
 
 \f2\fs24 \cf0 \

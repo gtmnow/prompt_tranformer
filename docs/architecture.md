@@ -2,14 +2,15 @@
 
 ## Purpose
 
-Prompt Transformer is a runtime prompt construction service. It accepts a raw prompt and deterministically rewrites it using:
+Prompt Transformer is a runtime prompt construction service. It accepts a raw prompt and rewrites it using:
 
 - a profile from `final_profile`
 - task inference rules
 - model policy rules
 - optional summary persona overrides
+- optional LLM-assisted prompt structure evaluation and scoring inputs
 
-The service does not call any LLMs and does not generate or update user profiles.
+The transformed prompt construction path remains deterministic. The service may optionally call a small evaluator model for structure extraction and future hybrid scoring, but it does not generate or update user profiles.
 
 ## Request lifecycle
 
@@ -24,16 +25,23 @@ The service does not call any LLMs and does not generate or update user profiles
 6. `LLMPolicyService` resolves the target model policy or fallback model.
 7. `PromptRequirementService` merges conversation state, derives missing fields, and evaluates enforcement.
 8. Optional compliance and PII check services add findings.
-9. `TransformerEngine._build_prompt()` constructs the transformed prompt only when the request is allowed to proceed.
-10. `RequestLogger` optionally persists a debug log row.
-11. The API returns a typed result containing either a transformed prompt, coaching guidance, or a blocked outcome.
+9. `PromptScoringService` computes the structural score and persists the conversation rollup.
+10. `TransformerEngine._build_prompt()` constructs the transformed prompt only when the request is allowed to proceed.
+11. `RequestLogger` optionally persists a debug log row.
+12. The API returns a typed result containing either a transformed prompt, coaching guidance, or a blocked outcome.
 
 ## Design principles
 
-- Deterministic: no model calls, no stochastic behavior.
+- Deterministic prompt construction: user-facing prompt rewriting should not depend on stochastic generation.
 - Database-first: runtime personalization comes only from `final_profile`.
 - Stateless: no session memory outside request logging.
 - Explicit fallback paths: missing users and unknown models degrade safely.
+
+For scoring and structure extraction, the long-term design is hybrid:
+
+- deterministic rules provide baseline stability
+- LLM evaluation provides semantic judgment
+- transformer-owned fusion logic produces the final score and field states
 
 ## Module ownership
 
@@ -89,6 +97,10 @@ The service does not call any LLMs and does not generate or update user profiles
   - orchestration, gating, and prompt construction
 - `app/services/request_logger.py`
   - optional request persistence
+- `app/services/prompt_scoring.py`
+  - structural score calculation and rollup persistence
+- `app/services/structure_evaluator.py`
+  - optional LLM-backed semantic extraction
 
 ## Database boundaries
 
@@ -112,8 +124,11 @@ Rules live in `app/rules/` and are loaded at app startup:
 - `summary_personas.yaml`
 - `llm_policies.yaml`
 - `task_rules.yaml`
+- `prompt_scoring.yaml`
 
 The runtime assumes these files are valid mappings. If you change rule structure, update the corresponding service code.
+
+`prompt_scoring.yaml` should be treated as the source of truth for score calibration and future hybrid scoring thresholds.
 
 ## Extension guidance
 
@@ -136,3 +151,22 @@ Changes that need care:
 Conversation-level prompt enforcement, compliance checks, and PII checks are now part of the runtime path.
 
 See [prompt_enforcement_implementation_spec.md](./prompt_enforcement_implementation_spec.md) for the implementation design, API shape changes, profile changes, and UI integration contract.
+
+## Prompt Scoring
+
+Prompt scoring is transformer-owned analytics.
+
+Current behavior:
+
+- deterministic field classification
+- YAML-backed score calibration
+- database-backed conversation rollups
+
+Planned behavior:
+
+- heuristic baseline score
+- LLM-evaluated semantic score
+- fused final score persisted in the transformer database
+- UI reads the final score through the score endpoint
+
+See [prompt_scoring_implementation_spec.md](./prompt_scoring_implementation_spec.md) for the detailed methodology.

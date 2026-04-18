@@ -8,6 +8,7 @@ from app.services.llm_policy import LLMPolicyService
 from app.services.pii_checks import PIICheckService
 from app.services.profile_resolver import ProfileResolver
 from app.services.prompt_requirements import PromptRequirementService
+from app.services.prompt_scoring import PromptScoringService
 from app.services.request_logger import RequestLogger
 from app.services.task_inference import TaskInferenceService
 
@@ -31,6 +32,7 @@ class TransformerEngine:
         self.task_inference = TaskInferenceService()
         self.llm_policy = LLMPolicyService()
         self.prompt_requirements = PromptRequirementService()
+        self.prompt_scoring = PromptScoringService(db_session)
         self.compliance_checks = ComplianceCheckService()
         self.pii_checks = PIICheckService()
         self.request_logger = RequestLogger(db_session)
@@ -43,7 +45,7 @@ class TransformerEngine:
             provider=payload.target_llm.provider,
             model=payload.target_llm.model,
         )
-        conversation, enforcement_rules, coaching_tip = self.prompt_requirements.evaluate(
+        conversation, enforcement_rules, coaching_tip, requirement_trace = self.prompt_requirements.evaluate(
             conversation_id=payload.conversation_id,
             raw_prompt=payload.raw_prompt,
             conversation=payload.conversation,
@@ -94,6 +96,23 @@ class TransformerEngine:
             used_fallback_model=policy.used_fallback_model,
         )
 
+        score_result = self.prompt_scoring.calculate(
+            conversation=conversation,
+            result_type=result_type,
+            requirement_trace=requirement_trace,
+        )
+        score_row = self.prompt_scoring.upsert_conversation_score(
+            conversation=conversation,
+            user_id_hash=payload.user_id,
+            task_type=task_type,
+            result_type=result_type,
+            score_result=score_result,
+        )
+        score_summary = self.prompt_scoring.attach_rollup_scores(
+            score_result=score_result,
+            score_row=score_row,
+        )
+
         self.request_logger.log(
             {
                 "session_id": payload.session_id,
@@ -129,6 +148,7 @@ class TransformerEngine:
             blocking_message=blocking_message,
             conversation=conversation,
             findings=findings,
+            scoring=score_summary.as_summary(),
             metadata=metadata,
         )
 

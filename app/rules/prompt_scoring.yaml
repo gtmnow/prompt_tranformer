@@ -1,0 +1,16 @@
+version: v4
+
+field_weights:
+  who: 25
+  task: 25
+  context: 25
+  output: 25
+
+status_points:
+  present: 25
+  derived: 5
+  missing: 0
+
+blend_weights:
+  heuristic: 0.5
+  llm: 0.5

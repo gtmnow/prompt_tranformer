@@ -11,6 +11,7 @@ from app.core.config import get_settings
 from app.db.session import get_db
 from app.main import create_app
 from app.models.profile import FinalProfile
+from app.models.prompt_score import ConversationPromptScore
 from app.models.request_log import PromptTransformRequest
 
 

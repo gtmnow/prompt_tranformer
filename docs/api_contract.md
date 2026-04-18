@@ -82,8 +82,53 @@ Request body:
 The service can return:
 
 - `result_type: "transformed"` when the request passes enforcement and no blocking findings exist
+- `result_type: "transformed"` may still include a non-blocking `coaching_tip` under `low` enforcement
 - `result_type: "coaching"` when required prompt structure is missing for the active enforcement level
 - `result_type: "blocked"` when compliance or PII findings are severe enough to stop execution
+
+### `GET /api/conversation_scores/{conversation_id}`
+
+Required query params:
+
+- `user_id`
+
+Required headers when service auth is enabled:
+
+- `Authorization: Bearer <PROMPT_TRANSFORMER_API_KEY>`
+- `X-Client-Id: <approved-client-id>`
+
+Response body:
+
+```json
+{
+  "conversation_id": "conv_123",
+  "user_id": "user_1",
+  "scoring_version": "v2",
+  "initial_score": 40,
+  "best_score": 100,
+  "final_score": 100,
+  "improvement_score": 60,
+  "best_improvement_score": 60,
+  "last_scored_at": "2026-04-18T15:20:00+00:00"
+}
+```
+
+This endpoint is the preferred read path for UI scoring displays.
+
+Conversation requirement statuses use:
+
+- `present`
+- `derived`
+- `missing`
+
+Meaning:
+
+- `present`
+  - the prompt clearly contains the element in natural language
+- `derived`
+  - the transformer could reasonably infer the element even though it was not clearly stated
+- `missing`
+  - the prompt did not provide enough information
 
 ## Supported task types
 

@@ -12,6 +12,7 @@ from app.models.profile import (
     FinalProfile,
     TypeDetailProfile,
 )
+from app.models.prompt_score import ConversationPromptScore
 from app.models.request_log import PromptTransformRequest
 
 

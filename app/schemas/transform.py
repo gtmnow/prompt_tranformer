@@ -8,7 +8,7 @@ class TargetLLM(BaseModel):
     model: str = Field(min_length=1, max_length=100)
 
 
-RequirementStatus = Literal["user_provided", "derived", "missing"]
+RequirementStatus = Literal["present", "derived", "missing", "user_provided"]
 EnforcementLevel = Literal["none", "low", "moderate", "full"]
 EnforcementStatus = Literal["not_evaluated", "passes", "needs_coaching", "blocked"]
 ResultType = Literal["transformed", "coaching", "blocked"]
@@ -19,6 +19,13 @@ FindingSeverity = Literal["low", "medium", "high"]
 class ConversationRequirement(BaseModel):
     value: Optional[str] = Field(default=None)
     status: RequirementStatus
+
+    @field_validator("status")
+    @classmethod
+    def normalize_status(cls, value: str) -> str:
+        if value == "user_provided":
+            return "present"
+        return value
 
 
 class ConversationEnforcement(BaseModel):
@@ -39,6 +46,31 @@ class Finding(BaseModel):
     severity: FindingSeverity
     code: str = Field(min_length=1, max_length=100)
     message: str = Field(min_length=1)
+
+
+class PromptScoringSummary(BaseModel):
+    scoring_version: str = Field(min_length=1, max_length=50)
+    initial_score: int = Field(ge=0, le=100)
+    final_score: int = Field(ge=0, le=100)
+    initial_llm_score: Optional[int] = Field(default=None, ge=0, le=100)
+    final_llm_score: Optional[int] = Field(default=None, ge=0, le=100)
+    structural_score: int = Field(ge=0, le=100)
+
+
+class ConversationScoreResponse(BaseModel):
+    conversation_id: str
+    user_id: str
+    scoring_version: str = Field(min_length=1, max_length=50)
+    initial_score: int = Field(ge=0, le=100)
+    best_score: int = Field(ge=0, le=100)
+    final_score: int = Field(ge=0, le=100)
+    initial_llm_score: Optional[int] = Field(default=None, ge=0, le=100)
+    best_llm_score: Optional[int] = Field(default=None, ge=0, le=100)
+    final_llm_score: Optional[int] = Field(default=None, ge=0, le=100)
+    structural_score: int = Field(ge=0, le=100)
+    improvement_score: int
+    best_improvement_score: int
+    last_scored_at: str
 
 
 class TransformPromptRequest(BaseModel):
@@ -87,4 +119,5 @@ class TransformPromptResponse(BaseModel):
     blocking_message: Optional[str] = None
     conversation: Optional[ConversationState] = None
     findings: list[Finding] = Field(default_factory=list)
+    scoring: Optional[PromptScoringSummary] = None
     metadata: TransformMetadata

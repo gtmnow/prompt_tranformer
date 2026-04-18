@@ -16,6 +16,7 @@ class RuleRegistry:
     summary_personas: dict[str, Any]
     llm_policies: dict[str, Any]
     task_rules: dict[str, Any]
+    prompt_scoring: dict[str, Any]
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
@@ -32,4 +33,5 @@ def get_rule_registry() -> RuleRegistry:
         summary_personas=_load_yaml(RULES_DIR / "summary_personas.yaml"),
         llm_policies=_load_yaml(RULES_DIR / "llm_policies.yaml"),
         task_rules=_load_yaml(RULES_DIR / "task_rules.yaml"),
+        prompt_scoring=_load_yaml(RULES_DIR / "prompt_scoring.yaml"),
     )

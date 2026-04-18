@@ -1,13 +1,14 @@
 # Prompt Transformer
 
-Prompt Transformer is a deterministic FastAPI service that rewrites user prompts using:
+Prompt Transformer is a FastAPI service that rewrites user prompts using:
 
 - a precomputed `final_profile` stored in PostgreSQL
 - deterministic task inference
 - local model policies
 - optional summary persona overrides
+- optional LLM-assisted structure evaluation for prompt enforcement
 
-The service never calls an LLM. It is stateless outside of database reads and optional request logging.
+The transformed prompt itself is built deterministically. Prompt structure evaluation may optionally use a small LLM evaluator to classify `who`, `task`, `context`, and `output` as `present`, `derived`, or `missing`.
 
 ## MVP scope
 
@@ -37,7 +38,7 @@ app/
   core/        config and rule loading
   db/          session, bootstrap, seeding
   models/      SQLAlchemy ORM models
-  rules/       YAML rule files
+  rules/       YAML rule files, including scoring calibration
   schemas/     request/response schemas
   services/    runtime transformer services
   main.py      FastAPI app factory
@@ -108,6 +109,10 @@ Primary endpoint:
 
 - `POST /api/transform_prompt`
 
+Score read endpoint:
+
+- `GET /api/conversation_scores/{conversation_id}?user_id=<user_id>`
+
 Health endpoint:
 
 - `GET /api/health`
@@ -162,6 +167,33 @@ See [docs/api_contract.md](./docs/api_contract.md) for request/response rules an
 Planned feature work for conversation-level prompt enforcement, compliance checks, and PII checks is documented in [docs/prompt_enforcement_implementation_spec.md](./docs/prompt_enforcement_implementation_spec.md).
 
 The current runtime now supports conversation-level enforcement outcomes through `result_type` as part of the API contract.
+
+Prompt score data is persisted in the transformer database and should be read through the score endpoint instead of being reconstructed in the UI.
+
+The scoring model itself is loaded from [app/rules/prompt_scoring.yaml](./app/rules/prompt_scoring.yaml) so calibration changes live with the transformer build rather than in the database.
+
+The top-level `version` in that YAML is the scoring model version of record and is persisted with each conversation score row as `scoring_version`.
+
+The long-term scoring direction is hybrid:
+
+- heuristics provide the baseline score and fallback behavior
+- an internal LLM evaluator provides semantic scoring judgments for the four dimensions
+- transformer-owned fusion logic produces the final score shown in the UI
+
+This hybrid methodology is documented in [docs/prompt_scoring_implementation_spec.md](./docs/prompt_scoring_implementation_spec.md).
+
+The enforcement ladder is:
+
+- `none`
+  - no prompt structure coaching
+- `low`
+  - process the prompt and optionally return light coaching
+- `moderate`
+  - require `who`, `task`, `context`, and `output`
+- `full`
+  - require all four elements plus labeled `Who:`, `Task:`, `Context:`, and `Output:` sections
+
+Prompt scoring design and implementation planning is documented in [docs/prompt_scoring_implementation_spec.md](./docs/prompt_scoring_implementation_spec.md).
 
 ## Seeded users
 
@@ -221,3 +253,4 @@ See [docs/operations.md](./docs/operations.md) for deployment and troubleshootin
 - [docs/api_contract.md](./docs/api_contract.md)
 - [docs/operations.md](./docs/operations.md)
 - [docs/prompt_enforcement_implementation_spec.md](./docs/prompt_enforcement_implementation_spec.md)
+- [docs/prompt_scoring_implementation_spec.md](./docs/prompt_scoring_implementation_spec.md)

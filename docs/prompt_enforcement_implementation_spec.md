@@ -2,15 +2,15 @@
 
 ## Purpose
 
-This document defines the implementation plan for adding conversation-level prompt structure enforcement, compliance checks, and PII checks to Prompt Transformer.
+This document defines the implementation plan for conversation-level prompt structure enforcement, compliance checks, and PII checks in Prompt Transformer.
 
-The feature adds deterministic validation before prompt transformation. Depending on user profile settings and the conversation's current setup state, the transformer will either:
+The feature adds a coaching and gating layer before prompt transformation. Depending on user profile settings and the conversation's current setup state, the transformer will either:
 
 - transform the prompt normally
 - return coaching guidance for missing prompt structure
 - return warnings or blocking findings for compliance or PII risks
 
-The transformer remains deterministic and does not call an LLM.
+Prompt structure evaluation may use an LLM-assisted evaluator for semantic extraction, but enforcement decisions remain transformer-owned and deterministic at the contract level.
 
 ## Goals
 
@@ -21,13 +21,14 @@ The transformer remains deterministic and does not call an LLM.
 - avoid re-asking for the same setup data on every message
 - prevent coached or blocked prompts from being sent to the target LLM
 - add deterministic compliance and PII screening before transformation
+- use enforcement as a training aid that improves user prompting discipline over time
 
 ## Non-goals
 
 - persistent storage of per-thread `who`, `task`, `context`, and `output` in the transformer database
-- LLM-based semantic validation
 - full DLP or enterprise compliance coverage
 - automatic policy enforcement after the prompt has already been sent to a model
+- changing the prompt score directly based on enforcement level
 
 ## Core concepts
 
@@ -61,7 +62,7 @@ These values are conversation-scoped and should be stored by the Prompt UI in me
 
 Each field should also track how it was established.
 
-- `user_provided`
+- `present`
 - `derived`
 - `missing`
 
@@ -89,7 +90,7 @@ This keeps the object shared across both systems without requiring the transform
 
 - read user enforcement settings from the profile
 - read `conversation_id` and conversation state from the request
-- validate prompt structure using deterministic rules
+- validate prompt structure using semantic extraction plus deterministic enforcement rules
 - evaluate compliance and PII checks when enabled
 - decide whether the request is transformable, coachable, warn-only, or blocked
 - return structured results and updated conversation state for the UI to act on
@@ -121,6 +122,8 @@ The conversation setup model is:
   - examples: plain response, bullet list, JSON, markdown file, image prompt, code patch
 
 The transformer should validate presence of these elements against the combined conversation state, not just the latest user message.
+
+Presence means the prompt clearly contains the element in natural language. Users should not need rigid labels to receive structural credit.
 
 ## Conversation object contract
 
@@ -167,59 +170,100 @@ Recommended rule:
 
 ### `low`
 
-- require a usable `task`
-- do not require additional `context`
-- `who` and `output` may be omitted or loosely derived
-- coach only when the request is too ambiguous to act on
+- process the prompt even when one or more structure elements are missing
+- return light coaching feedback when helpful
+- do not block execution for ordinary missing structure
+- reserve blocking for compliance or PII findings
+
+Recommended product behavior:
+
+- use low enforcement as a gentle reminder layer
+- allow users to continue even when the prompt is incomplete
+- surface a compact coaching tip such as "Coaching: include role, context, and output next time for a stronger result."
 
 ### `moderate`
 
-- require `task`
-- attempt to derive `who`, `context`, and `output` from:
-  - thread memory
-  - the current raw prompt
-  - deterministic heuristics
-- if an important element is still missing after derivation, return coaching
-
-Recommended moderate requirement:
-
-- must have `task`
-- must have at least one of `context` or `output`
-- `who` may be derived or defaulted
-
-### `full`
-
-- require all of:
+- require all four ideas:
   - `who`
   - `task`
   - `context`
   - `output`
-- if any are missing, return coaching and do not produce a transformed prompt for model execution
+- do not require labeled formatting
+- allow natural-language prompts to pass when the four elements are clearly present
+- if one or more elements are still missing after semantic evaluation, return coaching and do not produce a transformed prompt
 
-## Deterministic derivation rules
+Recommended product behavior:
 
-The first implementation should favor simple heuristics over brittle exact formatting requirements.
+- use moderate enforcement after users no longer need rigid structure training
+- coach users on missing elements, not on prompt formatting style
+
+### `full`
+
+- require all four elements:
+  - `who`
+  - `task`
+  - `context`
+  - `output`
+- require deliberate labeled structure using:
+  - `Who:`
+  - `Task:`
+  - `Context:`
+  - `Output:`
+- if any required element is missing, or if the prompt does not use the labeled format, return coaching and do not produce a transformed prompt for model execution
+
+Recommended product behavior:
+
+- use full enforcement as a training mode for deliberate prompt construction
+- treat it as a discipline-building layer, not a different scoring algorithm
+- allow users to graduate to less strict enforcement over time as their starting scores improve
+
+## Semantic extraction and derivation rules
+
+The first implementation should recognize three structural states:
+
+- `present`
+  - the prompt clearly contains the element
+- `derived`
+  - the element is reasonably inferable from the prompt or conversation state, but is not clearly stated
+- `missing`
+  - the prompt does not give enough information
 
 Examples:
 
-- infer `task` from imperative verbs or existing task inference rules
-- infer `output` from phrases like:
+- `tell me a joke`
+  - `task`: `present`
+  - `output`: `derived`
+  - `who`: `missing`
+  - `context`: `missing`
+- `You are a senior Python engineer. Explain rate limiting for a SaaS API. I am studying for a system design interview. Answer in the chat with an overview, components, flow, tradeoffs, and one example.`
+  - all four fields: `present`
+
+The service should not require users to write explicit labels in order to receive structural credit.
+
+Labels are an enforcement rule only for `full`, not a scoring rule.
+
+The extraction layer should favor semantic interpretation over brittle exact-match formatting.
+
+Examples:
+
+- detect `task` from imperative verbs, direct asks, or clearly described work
+- detect `output` from phrases like:
   - "write an email"
   - "give me bullet points"
   - "return JSON"
   - "draft a memo"
   - "generate an image prompt"
-- infer `context` from phrases like:
+- detect `context` from phrases like:
   - "for my boss"
   - "for a presentation"
   - "for a client"
   - "to send to prospects"
-- infer `who` from phrases like:
+- detect `who` from phrases like:
   - "act as"
   - "you are a"
   - "as an expert"
 
-The service should not require users to write explicit labels like `Who:` or `Context:` unless product requirements change later.
+When the evaluator cannot determine a field confidently, it should leave the field as `missing` rather than inventing a default.
 
 ## Compliance checks
 
@@ -358,11 +402,11 @@ Add a conversation object to the request payload.
     "requirements": {
       "who": {
         "value": "sales copywriter",
-        "status": "user_provided"
+        "status": "present"
       },
       "task": {
         "value": "draft an outreach email",
-        "status": "user_provided"
+        "status": "present"
       },
       "context": {
         "value": "for B2B outbound prospecting",

@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     structure_evaluator_base_url: str = "https://api.openai.com/v1"
     structure_evaluator_model: str = "gpt-4.1-mini"
     structure_evaluator_timeout_seconds: float = 15.0
+    db_pool_size: int = 20
+    db_max_overflow: int = 40
+    db_pool_timeout_seconds: float = 15.0
 
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import OperationalError, TimeoutError as SQLAlchemyTimeoutError
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_service_auth
@@ -39,6 +39,11 @@ def transform_prompt(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database unavailable",
         ) from exc
+    except SQLAlchemyTimeoutError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database connection pool exhausted",
+        ) from exc
 
 
 @router.get("/conversation_scores/{conversation_id}", response_model=ConversationScoreResponse)
@@ -60,4 +65,9 @@ def get_conversation_score(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database unavailable",
+        ) from exc
+    except SQLAlchemyTimeoutError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database connection pool exhausted",
         ) from exc

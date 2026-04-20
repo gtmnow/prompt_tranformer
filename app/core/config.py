@@ -11,6 +11,11 @@ class Settings(BaseSettings):
     port: int = 8000
     enable_request_logging: bool = False
     enable_transform_timing_logs: bool = True
+    enable_profile_cache: bool = True
+    profile_cache_ttl_seconds: float = 300.0
+    enable_async_score_persistence: bool = True
+    score_persistence_debounce_seconds: float = 0.5
+    score_persistence_workers: int = 4
     railway_auto_migrate: bool = True
     railway_seed_on_start: bool = False
     host: str = "0.0.0.0"

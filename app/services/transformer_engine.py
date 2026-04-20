@@ -133,18 +133,14 @@ class TransformerEngine:
                 result_type=result_type,
                 requirement_trace=requirement_trace,
             )
-            score_row = self.prompt_scoring.upsert_conversation_score(
+            score_summary = self.prompt_scoring.upsert_conversation_score(
                 conversation=conversation,
                 user_id_hash=payload.user_id,
                 task_type=task_type,
                 result_type=result_type,
                 score_result=score_result,
             )
-            score_summary = self.prompt_scoring.attach_rollup_scores(
-                score_result=score_result,
-                score_row=score_row,
-            )
-            timings_ms["scoring_persist"] = (time.perf_counter() - step_started_at) * 1000
+            timings_ms["scoring_dispatch"] = (time.perf_counter() - step_started_at) * 1000
 
             step_started_at = time.perf_counter()
             self.request_logger.log(
@@ -183,7 +179,7 @@ class TransformerEngine:
                 blocking_message=blocking_message,
                 conversation=conversation,
                 findings=findings,
-                scoring=score_summary.as_summary(),
+                scoring=score_summary,
                 metadata=metadata,
             )
         finally:

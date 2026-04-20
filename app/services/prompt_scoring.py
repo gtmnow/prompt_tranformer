@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from threading import Lock
 from typing import Optional
 
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
+from app.db.session import SessionLocal
 from app.core.rules import get_rule_registry
 from app.models.prompt_score import ConversationPromptScore
 from app.schemas.transform import ConversationState, PromptScoringSummary
@@ -40,8 +45,15 @@ class PromptScoreResult:
 
 
 class PromptScoringService:
+    _executor: ThreadPoolExecutor | None = None
+    _executor_lock = Lock()
+    _pending_scores: dict[str, dict[str, object]] = {}
+    _pending_lock = Lock()
+    _scheduled_conversations: set[str] = set()
+
     def __init__(self, db_session: Session):
         self.db_session = db_session
+        self.settings = get_settings()
         scoring_rules = get_rule_registry().prompt_scoring
         self.scoring_version = str(scoring_rules.get("version", "v1"))
         self.field_weights = {
@@ -166,22 +178,143 @@ class PromptScoringService:
         task_type: str,
         result_type: str,
         score_result: PromptScoreResult,
+    ) -> PromptScoringSummary:
+        if self.settings.enable_async_score_persistence:
+            self._enqueue_score_persistence(
+                conversation=conversation,
+                user_id_hash=user_id_hash,
+                task_type=task_type,
+                result_type=result_type,
+                score_result=score_result,
+            )
+            return score_result.as_summary()
+
+        score_row = self._upsert_conversation_score_sync(
+            db_session=self.db_session,
+            conversation=conversation,
+            user_id_hash=user_id_hash,
+            task_type=task_type,
+            result_type=result_type,
+            score_result=score_result,
+        )
+        return self.attach_rollup_scores(
+            score_result=score_result,
+            score_row=score_row,
+        ).as_summary()
+
+    @classmethod
+    def _get_executor(cls, max_workers: int) -> ThreadPoolExecutor:
+        with cls._executor_lock:
+            if cls._executor is None:
+                cls._executor = ThreadPoolExecutor(
+                    max_workers=max_workers,
+                    thread_name_prefix="prompt-score-writer",
+                )
+            return cls._executor
+
+    def _enqueue_score_persistence(
+        self,
+        *,
+        conversation: ConversationState,
+        user_id_hash: str,
+        task_type: str,
+        result_type: str,
+        score_result: PromptScoreResult,
+    ) -> None:
+        conversation_id = conversation.conversation_id
+        payload = {
+            "conversation_id": conversation.conversation_id,
+            "enforcement_level": conversation.enforcement.level,
+            "enforcement_status": conversation.enforcement.status,
+            "user_id_hash": user_id_hash,
+            "task_type": task_type,
+            "result_type": result_type,
+            "score_result": score_result,
+        }
+
+        with self._pending_lock:
+            self._pending_scores[conversation_id] = payload
+            if conversation_id in self._scheduled_conversations:
+                return
+            self._scheduled_conversations.add(conversation_id)
+
+        self._get_executor(self.settings.score_persistence_workers).submit(
+            self._flush_conversation_score,
+            conversation_id,
+            self.settings.score_persistence_debounce_seconds,
+        )
+
+    @classmethod
+    def _flush_conversation_score(cls, conversation_id: str, debounce_seconds: float) -> None:
+        while True:
+            time.sleep(debounce_seconds)
+            with cls._pending_lock:
+                payload = cls._pending_scores.pop(conversation_id, None)
+
+            if payload is None:
+                with cls._pending_lock:
+                    cls._scheduled_conversations.discard(conversation_id)
+                return
+
+            db_session = SessionLocal()
+            try:
+                cls._upsert_conversation_score_sync(
+                    db_session=db_session,
+                    conversation_id=str(payload["conversation_id"]),
+                    enforcement_level=str(payload["enforcement_level"]),
+                    enforcement_status=str(payload["enforcement_status"]),
+                    user_id_hash=str(payload["user_id_hash"]),
+                    task_type=str(payload["task_type"]),
+                    result_type=str(payload["result_type"]),
+                    score_result=payload["score_result"],
+                )
+            finally:
+                db_session.close()
+
+            with cls._pending_lock:
+                if conversation_id not in cls._pending_scores:
+                    cls._scheduled_conversations.discard(conversation_id)
+                    return
+
+    @staticmethod
+    def _upsert_conversation_score_sync(
+        *,
+        db_session: Session,
+        score_result: PromptScoreResult,
+        user_id_hash: str,
+        task_type: str,
+        result_type: str,
+        conversation: ConversationState | None = None,
+        conversation_id: str | None = None,
+        enforcement_level: str | None = None,
+        enforcement_status: str | None = None,
     ) -> ConversationPromptScore:
+        resolved_conversation_id = conversation.conversation_id if conversation is not None else conversation_id
+        resolved_enforcement_level = (
+            conversation.enforcement.level if conversation is not None else enforcement_level
+        )
+        resolved_enforcement_status = (
+            conversation.enforcement.status if conversation is not None else enforcement_status
+        )
+
+        if resolved_conversation_id is None or resolved_enforcement_level is None or resolved_enforcement_status is None:
+            raise ValueError("Conversation score persistence requires conversation identity and enforcement state.")
+
         now = datetime.now(timezone.utc)
         score_row = (
-            self.db_session.query(ConversationPromptScore)
-            .filter_by(conversation_id=conversation.conversation_id)
+            db_session.query(ConversationPromptScore)
+            .filter_by(conversation_id=resolved_conversation_id)
             .one_or_none()
         )
 
         if score_row is None:
             score_row = ConversationPromptScore(
-                conversation_id=conversation.conversation_id,
+                conversation_id=resolved_conversation_id,
                 user_id_hash=user_id_hash,
                 task_type=task_type,
                 conversation_started_at=now,
                 last_scored_at=now,
-                enforcement_level=conversation.enforcement.level,
+                enforcement_level=resolved_enforcement_level,
                 initial_score=score_result.structural_score,
                 best_score=score_result.structural_score,
                 final_score=score_result.structural_score,
@@ -191,7 +324,7 @@ class PromptScoringService:
                 improvement_score=0,
                 best_improvement_score=0,
                 passed_without_coaching=result_type == "transformed",
-                reached_policy_complete=conversation.enforcement.status == "passes",
+                reached_policy_complete=resolved_enforcement_status == "passes",
                 coaching_turn_count=1 if result_type == "coaching" else 0,
                 blocked_turn_count=1 if result_type == "blocked" else 0,
                 transformed_turn_count=1 if result_type == "transformed" else 0,
@@ -200,13 +333,13 @@ class PromptScoringService:
                 context_status=score_result.field_statuses["context"],
                 output_status=score_result.field_statuses["output"],
                 score_details_json=score_result.score_details,
-                scoring_version=self.scoring_version,
+                scoring_version=score_result.scoring_version,
             )
-            self.db_session.add(score_row)
+            db_session.add(score_row)
         else:
             score_row.task_type = task_type if task_type != "unknown" else score_row.task_type
             score_row.last_scored_at = now
-            score_row.enforcement_level = conversation.enforcement.level
+            score_row.enforcement_level = resolved_enforcement_level
             score_row.final_score = score_result.structural_score
             score_row.best_score = max(score_row.best_score, score_result.structural_score)
             score_row.final_llm_score = score_result.llm_score
@@ -219,14 +352,14 @@ class PromptScoringService:
             score_row.improvement_score = score_row.final_score - score_row.initial_score
             score_row.best_improvement_score = score_row.best_score - score_row.initial_score
             score_row.reached_policy_complete = (
-                score_row.reached_policy_complete or conversation.enforcement.status == "passes"
+                score_row.reached_policy_complete or resolved_enforcement_status == "passes"
             )
             score_row.who_status = score_result.field_statuses["who"]
             score_row.task_status = score_result.field_statuses["task"]
             score_row.context_status = score_result.field_statuses["context"]
             score_row.output_status = score_result.field_statuses["output"]
             score_row.score_details_json = score_result.score_details
-            score_row.scoring_version = self.scoring_version
+            score_row.scoring_version = score_result.scoring_version
 
             if result_type == "coaching":
                 score_row.coaching_turn_count += 1
@@ -241,8 +374,7 @@ class PromptScoringService:
                 else False
             )
 
-        self.db_session.commit()
-        self.db_session.refresh(score_row)
+        db_session.commit()
         return score_row
 
     def attach_rollup_scores(

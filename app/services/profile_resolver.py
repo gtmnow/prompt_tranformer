@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from threading import Lock
+import time
 from typing import Optional
 
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.core.rules import get_rule_registry
 from app.models.profile import FinalProfile
 
@@ -31,17 +34,25 @@ class ResolvedPersona:
 
 
 class ProfileResolver:
+    _cache: dict[str, tuple[float, ResolvedPersona]] = {}
+    _cache_lock = Lock()
+
     def __init__(self, db_session: Session):
         self.db_session = db_session
+        self.settings = get_settings()
         self.rule_registry = get_rule_registry()
 
     def resolve(self, user_id: str, summary_type: Optional[int]) -> ResolvedPersona:
         if summary_type is not None:
             return self._from_summary_override(summary_type)
 
+        cached_persona = self._get_cached_persona(user_id)
+        if cached_persona is not None:
+            return cached_persona
+
         db_profile = self.db_session.get(FinalProfile, user_id)
         if db_profile is not None:
-            return ResolvedPersona(
+            resolved_persona = ResolvedPersona(
                 values={field: float(getattr(db_profile, field)) for field in PROFILE_FIELDS},
                 source="db_profile",
                 profile_version=db_profile.profile_version,
@@ -49,8 +60,35 @@ class ProfileResolver:
                 compliance_check_enabled=bool(db_profile.compliance_check_enabled),
                 pii_check_enabled=bool(db_profile.pii_check_enabled),
             )
+            self._set_cached_persona(user_id, resolved_persona)
+            return resolved_persona
 
-        return self._generic_default()
+        resolved_persona = self._generic_default()
+        self._set_cached_persona(user_id, resolved_persona)
+        return resolved_persona
+
+    def _get_cached_persona(self, user_id: str) -> ResolvedPersona | None:
+        if not self.settings.enable_profile_cache:
+            return None
+
+        now = time.monotonic()
+        with self._cache_lock:
+            cached_entry = self._cache.get(user_id)
+            if cached_entry is None:
+                return None
+            expires_at, resolved_persona = cached_entry
+            if expires_at <= now:
+                self._cache.pop(user_id, None)
+                return None
+            return resolved_persona
+
+    def _set_cached_persona(self, user_id: str, resolved_persona: ResolvedPersona) -> None:
+        if not self.settings.enable_profile_cache:
+            return
+
+        expires_at = time.monotonic() + self.settings.profile_cache_ttl_seconds
+        with self._cache_lock:
+            self._cache[user_id] = (expires_at, resolved_persona)
 
     def _from_summary_override(self, summary_type: int) -> ResolvedPersona:
         personas = self.rule_registry.summary_personas.get("summary_types", {})

@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Optional
 
 import httpx
 
 from app.core.config import get_settings
+
+
+logger = logging.getLogger("uvicorn.error")
 
 
 class StructureEvaluationService:
@@ -25,8 +29,24 @@ class StructureEvaluationService:
         raw_prompt: str,
         enforcement_level: str,
     ) -> Optional[dict[str, Any]]:
-        if not self.is_enabled():
+        enabled = self.is_enabled()
+        if not enabled:
+            logger.info(
+                "structure_evaluator_skipped enabled=%s flag=%s api_key_present=%s model=%s",
+                enabled,
+                self.settings.structure_evaluator_enabled,
+                bool(self.settings.structure_evaluator_api_key),
+                self.settings.structure_evaluator_model,
+            )
             return None
+
+        logger.info(
+            "structure_evaluator_request model=%s base_url=%s prompt_chars=%s enforcement_level=%s",
+            self.settings.structure_evaluator_model,
+            self.settings.structure_evaluator_base_url,
+            len(raw_prompt),
+            enforcement_level,
+        )
 
         payload = {
             "model": self.settings.structure_evaluator_model,
@@ -72,12 +92,52 @@ class StructureEvaluationService:
                     json=payload,
                 )
             response.raise_for_status()
-            text = self._extract_output_text(response.json())
+            response_payload = response.json()
+            text = self._extract_output_text(response_payload)
+            if not text:
+                logger.warning(
+                    "structure_evaluator_empty_output status_code=%s response_keys=%s",
+                    response.status_code,
+                    sorted(response_payload.keys()) if isinstance(response_payload, dict) else None,
+                )
+                return None
             parsed = json.loads(text)
             if not isinstance(parsed, dict):
+                logger.warning(
+                    "structure_evaluator_invalid_payload_type parsed_type=%s",
+                    type(parsed).__name__,
+                )
                 return None
+            logger.info(
+                "structure_evaluator_success status_code=%s returned_fields=%s",
+                response.status_code,
+                sorted(parsed.keys()),
+            )
             return parsed
-        except (httpx.HTTPError, ValueError, json.JSONDecodeError):
+        except httpx.HTTPStatusError as exc:
+            logger.warning(
+                "structure_evaluator_http_status_error status_code=%s response_text=%s",
+                exc.response.status_code,
+                exc.response.text[:500],
+            )
+            return None
+        except httpx.HTTPError as exc:
+            logger.warning(
+                "structure_evaluator_http_error error=%s",
+                str(exc),
+            )
+            return None
+        except json.JSONDecodeError as exc:
+            logger.warning(
+                "structure_evaluator_json_decode_error error=%s",
+                str(exc),
+            )
+            return None
+        except ValueError as exc:
+            logger.warning(
+                "structure_evaluator_value_error error=%s",
+                str(exc),
+            )
             return None
 
     def _build_system_prompt(self) -> str:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any, Optional
 
 import httpx
@@ -103,7 +104,7 @@ class StructureEvaluationService:
                     sorted(response_payload.keys()) if isinstance(response_payload, dict) else None,
                 )
                 return None
-            parsed = json.loads(text)
+            parsed = self._parse_output_json(text)
             if not isinstance(parsed, dict):
                 logger.warning(
                     "structure_evaluator_invalid_payload_type parsed_type=%s",
@@ -151,14 +152,21 @@ class StructureEvaluationService:
             return None
         except json.JSONDecodeError as exc:
             logger.warning(
-                "structure_evaluator_json_decode_error error=%s",
+                "structure_evaluator_json_decode_error error=%s text_sample=%s",
                 str(exc),
+                self._truncate_for_log(text if "text" in locals() else None),
             )
             return None
         except ValueError as exc:
             logger.warning(
-                "structure_evaluator_value_error error=%s",
+                "structure_evaluator_value_error error=%s text_sample=%s response_keys=%s",
                 str(exc),
+                self._truncate_for_log(text if "text" in locals() else None),
+                (
+                    sorted(response_payload.keys())
+                    if "response_payload" in locals() and isinstance(response_payload, dict)
+                    else None
+                ),
             )
             return None
 
@@ -207,14 +215,69 @@ class StructureEvaluationService:
         if isinstance(output_text, str) and output_text.strip():
             return output_text.strip()
 
+        for key in ("text", "content"):
+            value = payload.get(key)
+            extracted = self._extract_text_value(value)
+            if extracted:
+                return extracted
+
         output = payload.get("output", [])
         if isinstance(output, list):
             for item in output:
-                if item.get("type") != "message":
-                    continue
-                for content_item in item.get("content", []):
-                    if content_item.get("type") == "output_text":
-                        text_value = content_item.get("text", "")
-                        if text_value:
-                            return str(text_value).strip()
+                extracted = self._extract_text_value(item)
+                if extracted:
+                    return extracted
         return ""
+
+    def _extract_text_value(self, value: Any) -> str:
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        if isinstance(value, dict):
+            for key in ("text", "output_text", "content"):
+                extracted = self._extract_text_value(value.get(key))
+                if extracted:
+                    return extracted
+            return ""
+        if isinstance(value, list):
+            for item in value:
+                extracted = self._extract_text_value(item)
+                if extracted:
+                    return extracted
+        return ""
+
+    def _parse_output_json(self, text: str) -> dict[str, Any]:
+        candidates = [
+            text.strip(),
+            self._strip_code_fences(text),
+            self._extract_json_object(text),
+        ]
+        seen: set[str] = set()
+        for candidate in candidates:
+            normalized = candidate.strip()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            try:
+                parsed = json.loads(normalized)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                return parsed
+        raise ValueError("Unable to parse evaluator JSON payload.")
+
+    def _strip_code_fences(self, text: str) -> str:
+        fenced = re.sub(r"^```(?:json)?\s*", "", text.strip(), flags=re.IGNORECASE)
+        fenced = re.sub(r"\s*```$", "", fenced)
+        return fenced.strip()
+
+    def _extract_json_object(self, text: str) -> str:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            return ""
+        return text[start : end + 1].strip()
+
+    def _truncate_for_log(self, value: str | None, limit: int = 500) -> str | None:
+        if value is None:
+            return None
+        return value[:limit]

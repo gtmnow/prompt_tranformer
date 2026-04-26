@@ -62,6 +62,16 @@ class PromptScoringSummary(BaseModel):
     structural_score: int = Field(ge=0, le=100)
 
 
+class ResolvedProfileResponse(BaseModel):
+    user_id: str = Field(min_length=1, max_length=255)
+    summary_type: Optional[int] = Field(default=None, ge=1, le=9)
+    profile_version: str = Field(min_length=1, max_length=255)
+    persona_source: str = Field(min_length=1, max_length=100)
+    prompt_enforcement_level: str = Field(min_length=1, max_length=20)
+    compliance_check_enabled: bool
+    pii_check_enabled: bool
+
+
 class ConversationScoreResponse(BaseModel):
     conversation_id: str
     user_id: str

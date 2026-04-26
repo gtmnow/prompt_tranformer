@@ -6,9 +6,11 @@ from app.api.deps import require_service_auth
 from app.db.session import get_db
 from app.schemas.transform import (
     ConversationScoreResponse,
+    ResolvedProfileResponse,
     TransformPromptRequest,
     TransformPromptResponse,
 )
+from app.services.profile_resolver import ProfileResolver
 from app.services.conversation_scores import ConversationScoreService
 from app.services.transformer_engine import TransformerEngine
 
@@ -59,6 +61,42 @@ def get_conversation_score(
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except OperationalError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database unavailable",
+        ) from exc
+    except SQLAlchemyTimeoutError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database connection pool exhausted",
+        ) from exc
+
+
+@router.get("/profiles/resolve", response_model=ResolvedProfileResponse)
+def resolve_profile(
+    user_id: str,
+    summary_type: int | None = None,
+    _: str = Depends(require_service_auth),
+    db: Session = Depends(get_db),
+) -> ResolvedProfileResponse:
+    try:
+        resolver = ProfileResolver(db_session=db)
+        persona = resolver.resolve(user_id=user_id, summary_type=summary_type)
+        return ResolvedProfileResponse(
+            user_id=user_id,
+            summary_type=summary_type,
+            profile_version=persona.profile_version,
+            persona_source=persona.source,
+            prompt_enforcement_level=persona.prompt_enforcement_level,
+            compliance_check_enabled=persona.compliance_check_enabled,
+            pii_check_enabled=persona.pii_check_enabled,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
         ) from exc
     except OperationalError as exc:

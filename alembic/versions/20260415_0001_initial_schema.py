@@ -40,7 +40,7 @@ def upgrade() -> None:
         "prompt_transform_requests",
         sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
         sa.Column("session_id", sa.String(length=255), nullable=False),
-        sa.Column("user_id", sa.String(length=255), nullable=False),
+        sa.Column("user_id_hash", sa.String(length=255), nullable=False),
         sa.Column("raw_prompt", sa.Text(), nullable=False),
         sa.Column("transformed_prompt", sa.Text(), nullable=False),
         sa.Column("task_type", sa.String(length=100), nullable=False),
@@ -52,11 +52,11 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
     )
     op.create_index("ix_prompt_transform_requests_session_id", "prompt_transform_requests", ["session_id"])
-    op.create_index("ix_prompt_transform_requests_user_id", "prompt_transform_requests", ["user_id"])
+    op.create_index("ix_prompt_transform_requests_user_id_hash", "prompt_transform_requests", ["user_id_hash"])
 
 
 def downgrade() -> None:
-    op.drop_index("ix_prompt_transform_requests_user_id", table_name="prompt_transform_requests")
+    op.drop_index("ix_prompt_transform_requests_user_id_hash", table_name="prompt_transform_requests")
     op.drop_index("ix_prompt_transform_requests_session_id", table_name="prompt_transform_requests")
     op.drop_table("prompt_transform_requests")
     for table_name in (

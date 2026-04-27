@@ -55,7 +55,7 @@ class TransformerEngine:
 
         try:
             step_started_at = time.perf_counter()
-            persona = self.profile_resolver.resolve(payload.user_id, payload.summary_type)
+            persona = self.profile_resolver.resolve(payload.user_id_hash, payload.summary_type)
             timings_ms["profile_resolve"] = (time.perf_counter() - step_started_at) * 1000
             persona_source = persona.source
 
@@ -137,7 +137,7 @@ class TransformerEngine:
             )
             score_summary = self.prompt_scoring.upsert_conversation_score(
                 conversation=conversation,
-                user_id_hash=payload.user_id,
+                user_id_hash=payload.user_id_hash,
                 task_type=task_type,
                 result_type=result_type,
                 score_result=score_result,
@@ -153,7 +153,7 @@ class TransformerEngine:
                 {
                     "session_id": payload.session_id,
                     "conversation_id": payload.conversation_id,
-                    "user_id": payload.user_id,
+                    "user_id_hash": payload.user_id_hash,
                     "raw_prompt": payload.raw_prompt,
                     "transformed_prompt": transformed_prompt,
                     "task_type": task_type,
@@ -177,7 +177,7 @@ class TransformerEngine:
             return TransformPromptResponse(
                 session_id=payload.session_id,
                 conversation_id=payload.conversation_id,
-                user_id=payload.user_id,
+                user_id_hash=payload.user_id_hash,
                 result_type=result_type,
                 task_type=task_type,
                 transformed_prompt=transformed_prompt,
@@ -212,10 +212,10 @@ class TransformerEngine:
 
         timing_parts = [f"{name}_ms={value:.1f}" for name, value in timings_ms.items()]
         logger.info(
-            "transform_timing session_id=%s conversation_id=%s user_id=%s task_type=%s result_type=%s persona_source=%s total_ms=%.1f %s",
+            "transform_timing session_id=%s conversation_id=%s user_id_hash=%s task_type=%s result_type=%s persona_source=%s total_ms=%.1f %s",
             payload.session_id,
             payload.conversation_id,
-            payload.user_id,
+            payload.user_id_hash,
             task_type,
             result_type,
             persona_source,

@@ -13,7 +13,7 @@ class PromptTransformRequest(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     session_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     conversation_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True, default="")
-    user_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    user_id_hash: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     raw_prompt: Mapped[str] = mapped_column(Text, nullable=False)
     transformed_prompt: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     task_type: Mapped[str] = mapped_column(String(100), nullable=False)

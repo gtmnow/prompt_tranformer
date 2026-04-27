@@ -44,7 +44,7 @@ def test_transform_uses_db_profile(client) -> None:
         json={
             "session_id": "sess_123",
             "conversation_id": "conv_123",
-            "user_id": "user_1",
+            "user_id_hash": "user_1",
             "raw_prompt": "Explain this concept simply",
             "target_llm": {"provider": "openai", "model": "gpt-4.1"},
         },
@@ -66,7 +66,7 @@ def test_transform_uses_summary_override(client) -> None:
         json={
             "session_id": "sess_456",
             "conversation_id": "conv_456",
-            "user_id": "user_missing",
+            "user_id_hash": "user_missing",
             "raw_prompt": "Summarize this article",
             "target_llm": {"provider": "openai", "model": "gpt-4.1"},
             "summary_type": 1,
@@ -88,7 +88,7 @@ def test_transform_falls_back_to_generic_default(client) -> None:
         json={
             "session_id": "sess_789",
             "conversation_id": "conv_789",
-            "user_id": "user_missing",
+            "user_id_hash": "user_missing",
             "raw_prompt": "What should I do next?",
             "target_llm": {"provider": "openai", "model": "unknown-model"},
         },
@@ -110,7 +110,7 @@ def test_invalid_summary_type_returns_400(client) -> None:
         json={
             "session_id": "sess_999",
             "conversation_id": "conv_999",
-            "user_id": "user_1",
+            "user_id_hash": "user_1",
             "raw_prompt": "Explain this concept simply",
             "target_llm": {"provider": "openai", "model": "gpt-4.1"},
             "summary_type": 10,
@@ -126,7 +126,7 @@ def test_transform_requires_service_credentials(client) -> None:
         json={
             "session_id": "sess_missing_auth",
             "conversation_id": "conv_missing_auth",
-            "user_id": "user_1",
+            "user_id_hash": "user_1",
             "raw_prompt": "Explain this concept simply",
             "target_llm": {"provider": "openai", "model": "gpt-4.1"},
         },
@@ -146,7 +146,7 @@ def test_transform_rejects_invalid_service_credentials(client) -> None:
         json={
             "session_id": "sess_wrong_auth",
             "conversation_id": "conv_wrong_auth",
-            "user_id": "user_1",
+            "user_id_hash": "user_1",
             "raw_prompt": "Explain this concept simply",
             "target_llm": {"provider": "openai", "model": "gpt-4.1"},
         },
@@ -163,7 +163,7 @@ def test_transform_rejects_mismatched_conversation_ids(client) -> None:
         json={
             "session_id": "sess_conv_mismatch",
             "conversation_id": "conv_top_level",
-            "user_id": "user_1",
+            "user_id_hash": "user_1",
             "raw_prompt": "Explain this concept simply",
             "target_llm": {"provider": "openai", "model": "gpt-4.1"},
             "conversation": {
@@ -194,7 +194,7 @@ def test_transform_returns_coaching_when_full_enforcement_missing_fields(client)
         json={
             "session_id": "sess_coaching",
             "conversation_id": "conv_coaching",
-            "user_id": "user_1",
+            "user_id_hash": "user_1",
             "raw_prompt": "Explain how this works",
             "target_llm": {"provider": "openai", "model": "gpt-4.1"},
         },
@@ -218,7 +218,7 @@ def test_transform_allows_demo_enforcement_override(client) -> None:
         json={
             "session_id": "sess_override",
             "conversation_id": "conv_override",
-            "user_id": "user_1",
+            "user_id_hash": "user_1",
             "raw_prompt": "Explain how this works",
             "target_llm": {"provider": "openai", "model": "gpt-4.1"},
             "enforcement_level": "full",
@@ -241,7 +241,7 @@ def test_transform_derives_context_and_output_from_compact_prompt(client) -> Non
         json={
             "session_id": "sess_compact_prompt",
             "conversation_id": "conv_compact_prompt",
-            "user_id": "user_1",
+            "user_id_hash": "user_1",
             "raw_prompt": "you are telling jokes at a kids birthday party, and just give me the joke in the chat.",
             "target_llm": {"provider": "openai", "model": "gpt-4.1"},
             "enforcement_level": "full",
@@ -266,7 +266,7 @@ def test_transform_requires_more_than_generic_joke_prompt_under_full_enforcement
         json={
             "session_id": "sess_joke_prompt",
             "conversation_id": "conv_joke_prompt",
-            "user_id": "user_1",
+            "user_id_hash": "user_1",
             "raw_prompt": "tell me a joke",
             "target_llm": {"provider": "openai", "model": "gpt-4.1"},
             "enforcement_level": "full",
@@ -289,7 +289,7 @@ def test_transform_accepts_unlabeled_natural_language_prompt_under_moderate_enfo
         json={
             "session_id": "sess_moderate_natural_language",
             "conversation_id": "conv_moderate_natural_language",
-            "user_id": "user_1",
+            "user_id_hash": "user_1",
             "raw_prompt": (
                 "You are a senior Python software engineer. "
                 "Explain how to design a REST API rate-limiting system for a SaaS application. "
@@ -335,7 +335,7 @@ def test_transform_allows_derived_fields_under_moderate_enforcement_with_coachin
         json={
             "session_id": "sess_moderate_derived_ok",
             "conversation_id": "conv_moderate_derived_ok",
-            "user_id": "user_1",
+            "user_id_hash": "user_1",
             "raw_prompt": "You are a comedian at a kids birthday party tell me a joke",
             "target_llm": {"provider": "openai", "model": "gpt-4.1"},
             "enforcement_level": "moderate",
@@ -362,7 +362,7 @@ def test_transform_requires_labels_under_full_enforcement_even_when_elements_are
         json={
             "session_id": "sess_full_requires_labels",
             "conversation_id": "conv_full_requires_labels",
-            "user_id": "user_1",
+            "user_id_hash": "user_1",
             "raw_prompt": (
                 "You are a senior Python software engineer. "
                 "Explain how to design a REST API rate-limiting system for a SaaS application. "
@@ -392,7 +392,7 @@ def test_transform_accepts_labeled_prompt_under_full_enforcement(client) -> None
         json={
             "session_id": "sess_full_labeled",
             "conversation_id": "conv_full_labeled",
-            "user_id": "user_1",
+            "user_id_hash": "user_1",
             "raw_prompt": (
                 "Who: Senior Python software engineer\n"
                 "Task: Explain how to design a REST API rate-limiting system for a SaaS application.\n"
@@ -419,7 +419,7 @@ def test_transform_returns_light_coaching_under_low_enforcement_without_blocking
         json={
             "session_id": "sess_low_guidance",
             "conversation_id": "conv_low_guidance",
-            "user_id": "user_1",
+            "user_id_hash": "user_1",
             "raw_prompt": "tell me a joke",
             "target_llm": {"provider": "openai", "model": "gpt-4.1"},
             "enforcement_level": "low",
@@ -448,7 +448,7 @@ def test_transform_returns_warning_findings_when_compliance_check_enabled(client
         json={
             "session_id": "sess_compliance_warning",
             "conversation_id": "conv_compliance_warning",
-            "user_id": "user_1",
+            "user_id_hash": "user_1",
             "raw_prompt": "Please provide financial advice for my retirement plan.",
             "target_llm": {"provider": "openai", "model": "gpt-4.1"},
         },
@@ -476,7 +476,7 @@ def test_transform_blocks_when_pii_check_detects_high_risk_content(client) -> No
         json={
             "session_id": "sess_pii_blocked",
             "conversation_id": "conv_pii_blocked",
-            "user_id": "user_1",
+            "user_id_hash": "user_1",
             "raw_prompt": "Write an email for alice@example.com and bob@example.com about our offer.",
             "target_llm": {"provider": "openai", "model": "gpt-4.1"},
         },
@@ -506,7 +506,7 @@ def test_transform_logs_new_result_fields_when_request_logging_enabled(client) -
             json={
                 "session_id": "sess_logging",
                 "conversation_id": "conv_logging",
-                "user_id": "user_1",
+                "user_id_hash": "user_1",
                 "raw_prompt": "Explain how this works",
                 "target_llm": {"provider": "openai", "model": "gpt-4.1"},
             },
@@ -536,7 +536,7 @@ def test_transform_creates_conversation_score_rollup(client) -> None:
         json={
             "session_id": "sess_score_rollup",
             "conversation_id": "conv_score_rollup",
-            "user_id": "user_1",
+            "user_id_hash": "user_1",
             "raw_prompt": "Explain how this works",
             "target_llm": {"provider": "openai", "model": "gpt-4.1"},
         },
@@ -568,7 +568,7 @@ def test_transform_updates_conversation_score_when_prompt_improves(client) -> No
         json={
             "session_id": "sess_score_improve_1",
             "conversation_id": "conv_score_improve",
-            "user_id": "user_1",
+            "user_id_hash": "user_1",
             "raw_prompt": "tell me a joke",
             "target_llm": {"provider": "openai", "model": "gpt-4.1"},
             "enforcement_level": "full",
@@ -583,7 +583,7 @@ def test_transform_updates_conversation_score_when_prompt_improves(client) -> No
         json={
             "session_id": "sess_score_improve_2",
             "conversation_id": "conv_score_improve",
-            "user_id": "user_1",
+            "user_id_hash": "user_1",
             "raw_prompt": "you are telling jokes at a kids birthday party, and just give me the joke in the chat.",
             "target_llm": {"provider": "openai", "model": "gpt-4.1"},
             "enforcement_level": "full",
@@ -616,7 +616,7 @@ def test_conversation_memory_does_not_inflate_current_turn_score(client) -> None
         json={
             "session_id": "sess_memory_score_1",
             "conversation_id": "conv_memory_score",
-            "user_id": "user_1",
+            "user_id_hash": "user_1",
             "raw_prompt": "tell me a joke",
             "target_llm": {"provider": "openai", "model": "gpt-4.1"},
             "enforcement_level": "moderate",
@@ -631,7 +631,7 @@ def test_conversation_memory_does_not_inflate_current_turn_score(client) -> None
         json={
             "session_id": "sess_memory_score_2",
             "conversation_id": "conv_memory_score",
-            "user_id": "user_1",
+            "user_id_hash": "user_1",
             "raw_prompt": "you are a comedian tell me a joke the I can use at a kids birthday party",
             "target_llm": {"provider": "openai", "model": "gpt-4.1"},
             "conversation": first_body["conversation"],
@@ -665,7 +665,7 @@ def test_get_conversation_score_returns_rollup_from_database(client) -> None:
         json={
             "session_id": "sess_score_fetch",
             "conversation_id": "conv_score_fetch",
-            "user_id": "user_1",
+            "user_id_hash": "user_1",
             "raw_prompt": "tell me a joke",
             "target_llm": {"provider": "openai", "model": "gpt-4.1"},
             "enforcement_level": "low",
@@ -676,13 +676,13 @@ def test_get_conversation_score_returns_rollup_from_database(client) -> None:
     score_response = client.get(
         "/api/conversation_scores/conv_score_fetch",
         headers=AUTH_HEADERS,
-        params={"user_id": "user_1"},
+        params={"user_id_hash": "user_1"},
     )
 
     assert score_response.status_code == 200
     body = score_response.json()
     assert body["conversation_id"] == "conv_score_fetch"
-    assert body["user_id"] == "user_1"
+    assert body["user_id_hash"] == "user_1"
     assert body["scoring_version"] == "v4"
     assert body["initial_score"] == 30
     assert body["final_score"] == 30
@@ -707,7 +707,7 @@ def test_score_rollup_persists_hybrid_score_details(client) -> None:
         json={
             "session_id": "sess_hybrid_score_details",
             "conversation_id": "conv_hybrid_score_details",
-            "user_id": "user_1",
+            "user_id_hash": "user_1",
             "raw_prompt": (
                 "Who: Senior Python software engineer\n"
                 "Task: Explain how to design a REST API rate-limiting system for a SaaS application.\n"
@@ -770,7 +770,7 @@ def test_numeric_llm_dimension_scores_are_used_for_llm_total(client, monkeypatch
         json={
             "session_id": "sess_numeric_llm",
             "conversation_id": "conv_numeric_llm",
-            "user_id": "user_1",
+            "user_id_hash": "user_1",
             "raw_prompt": "you are a comedian tell me a joke for a kids birthday party",
             "target_llm": {"provider": "openai", "model": "gpt-4.1"},
             "enforcement_level": "moderate",
@@ -831,7 +831,7 @@ def test_llm_score_uses_current_prompt_not_prior_conversation_memory(client, mon
         json={
             "session_id": "sess_llm_current_1",
             "conversation_id": "conv_llm_current",
-            "user_id": "user_1",
+            "user_id_hash": "user_1",
             "raw_prompt": "tell me a joke",
             "target_llm": {"provider": "openai", "model": "gpt-4.1"},
             "enforcement_level": "moderate",
@@ -846,7 +846,7 @@ def test_llm_score_uses_current_prompt_not_prior_conversation_memory(client, mon
         json={
             "session_id": "sess_llm_current_2",
             "conversation_id": "conv_llm_current",
-            "user_id": "user_1",
+            "user_id_hash": "user_1",
             "raw_prompt": "you are a comedian tell me a joke",
             "conversation": first_body["conversation"],
             "target_llm": {"provider": "openai", "model": "gpt-4.1"},
@@ -869,7 +869,7 @@ def test_scoring_example_task_and_context_only_scores_55(client) -> None:
         json={
             "session_id": "sess_score_example_75",
             "conversation_id": "conv_score_example_75",
-            "user_id": "user_1",
+            "user_id_hash": "user_1",
             "raw_prompt": (
                 "Explain how to design a REST API rate-limiting system for a SaaS application.\n\n"
                 "I am preparing for a backend system design interview and need an answer that helps me "
@@ -894,7 +894,7 @@ def test_scoring_example_with_role_scores_80(client) -> None:
         json={
             "session_id": "sess_score_example_100",
             "conversation_id": "conv_score_example_100",
-            "user_id": "user_1",
+            "user_id_hash": "user_1",
             "raw_prompt": (
                 "You are a Senior Python software engineer\n\n"
                 "Explain how to design a REST API rate-limiting system for a SaaS application.\n\n"
@@ -920,7 +920,7 @@ def test_scoring_example_task_only_scores_30(client) -> None:
         json={
             "session_id": "sess_score_example_30",
             "conversation_id": "conv_score_example_30",
-            "user_id": "user_1",
+            "user_id_hash": "user_1",
             "raw_prompt": "Explain how to design a REST API rate-limiting system for a SaaS application.",
             "target_llm": {"provider": "openai", "model": "gpt-4.1"},
             "enforcement_level": "low",

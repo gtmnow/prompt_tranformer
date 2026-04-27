@@ -63,7 +63,7 @@ class PromptScoringSummary(BaseModel):
 
 
 class ResolvedProfileResponse(BaseModel):
-    user_id: str = Field(min_length=1, max_length=255)
+    user_id_hash: str = Field(min_length=1, max_length=255)
     summary_type: Optional[int] = Field(default=None, ge=1, le=9)
     profile_version: str = Field(min_length=1, max_length=255)
     persona_source: str = Field(min_length=1, max_length=100)
@@ -74,7 +74,7 @@ class ResolvedProfileResponse(BaseModel):
 
 class ConversationScoreResponse(BaseModel):
     conversation_id: str
-    user_id: str
+    user_id_hash: str
     scoring_version: str = Field(min_length=1, max_length=50)
     initial_score: int = Field(ge=0, le=100)
     best_score: int = Field(ge=0, le=100)
@@ -92,7 +92,7 @@ class ConversationScoreResponse(BaseModel):
 class TransformPromptRequest(BaseModel):
     session_id: str = Field(min_length=1, max_length=255)
     conversation_id: str = Field(min_length=1, max_length=255)
-    user_id: str = Field(min_length=1, max_length=255)
+    user_id_hash: str = Field(min_length=1, max_length=255)
     raw_prompt: str = Field(min_length=1)
     target_llm: TargetLLM
     conversation: Optional[ConversationState] = Field(default=None)
@@ -127,7 +127,7 @@ class TransformMetadata(BaseModel):
 class TransformPromptResponse(BaseModel):
     session_id: str
     conversation_id: str
-    user_id: str
+    user_id_hash: str
     result_type: ResultType
     task_type: Optional[str] = None
     transformed_prompt: Optional[str] = None

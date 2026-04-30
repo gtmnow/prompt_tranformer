@@ -15,6 +15,7 @@ from app.services.profile_resolver import ProfileResolver
 from app.services.prompt_requirements import PromptRequirementService
 from app.services.prompt_scoring import PromptScoringService
 from app.services.request_logger import RequestLogger
+from app.services.runtime_llm import RuntimeLlmConfigError, RuntimeLlmResolver
 from app.services.task_inference import TaskInferenceService
 
 
@@ -45,6 +46,7 @@ class TransformerEngine:
         self.compliance_checks = ComplianceCheckService()
         self.pii_checks = PIICheckService()
         self.request_logger = RequestLogger(db_session)
+        self.runtime_llm = RuntimeLlmResolver(db_session)
 
     def transform(self, payload: TransformPromptRequest) -> TransformPromptResponse:
         started_at = time.perf_counter()
@@ -54,6 +56,7 @@ class TransformerEngine:
         persona_source = "unknown"
 
         try:
+            runtime_llm = self.runtime_llm.resolve(payload.user_id_hash)
             step_started_at = time.perf_counter()
             persona = self.profile_resolver.resolve(payload.user_id_hash, payload.summary_type)
             timings_ms["profile_resolve"] = (time.perf_counter() - step_started_at) * 1000
@@ -67,8 +70,8 @@ class TransformerEngine:
 
             step_started_at = time.perf_counter()
             policy = self.llm_policy.resolve(
-                provider=payload.target_llm.provider,
-                model=payload.target_llm.model,
+                provider=runtime_llm.provider,
+                model=runtime_llm.model,
             )
             timings_ms["policy_resolve"] = (time.perf_counter() - step_started_at) * 1000
 
@@ -78,6 +81,7 @@ class TransformerEngine:
                 raw_prompt=payload.raw_prompt,
                 conversation=payload.conversation,
                 enforcement_level=effective_enforcement_level,
+                runtime_config=runtime_llm if runtime_llm.scoring_enabled else None,
             )
             timings_ms["requirements_eval"] = (time.perf_counter() - step_started_at) * 1000
 
@@ -124,9 +128,15 @@ class TransformerEngine:
                 persona_source=persona.source,
                 rules_applied=rules_applied,
                 profile_version=persona.profile_version,
-                requested_model=policy.requested_model,
+                requested_provider=payload.target_llm.provider,
+                requested_model=payload.target_llm.model,
+                resolved_provider=runtime_llm.provider,
                 resolved_model=policy.resolved_model,
                 used_fallback_model=policy.used_fallback_model,
+                used_authoritative_tenant_llm=(
+                    payload.target_llm.provider != runtime_llm.provider
+                    or payload.target_llm.model != runtime_llm.model
+                ),
             )
 
             step_started_at = time.perf_counter()
@@ -160,7 +170,7 @@ class TransformerEngine:
                     "result_type": result_type,
                     "coaching_tip": coaching_tip,
                     "blocking_message": blocking_message,
-                    "target_provider": payload.target_llm.provider,
+                    "target_provider": runtime_llm.provider,
                     "target_model": policy.resolved_model,
                     "persona_source": persona.source,
                     "used_fallback_model": policy.used_fallback_model,
@@ -188,6 +198,8 @@ class TransformerEngine:
                 scoring=score_summary,
                 metadata=metadata,
             )
+        except RuntimeLlmConfigError as exc:
+            raise ValueError(str(exc)) from exc
         finally:
             self._emit_timing_log(
                 payload=payload,

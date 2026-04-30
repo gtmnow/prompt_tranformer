@@ -1,0 +1,82 @@
+default:
+  request_timeout_seconds: 15.0
+  api_family: responses
+  endpoint_path: /responses
+  auth_scheme: bearer
+  json_mode: prompt_only
+  token_parameter: max_output_tokens
+  supports_system_prompt: true
+
+providers:
+  openai:
+    default_model: gpt-4.1
+    api_family: responses
+    endpoint_path: /responses
+    auth_scheme: bearer
+    json_mode: prompt_only
+    token_parameter: max_output_tokens
+    models:
+      gpt-4.1:
+        api_family: responses
+        token_parameter: max_output_tokens
+      gpt-4.1-mini:
+        api_family: responses
+        token_parameter: max_output_tokens
+      gpt-5.4:
+        api_family: responses
+        token_parameter: max_output_tokens
+      gpt-5.4-mini:
+        api_family: responses
+        token_parameter: max_output_tokens
+
+  xai:
+    default_model: grok-3
+    api_family: chat_completions
+    endpoint_path: /chat/completions
+    auth_scheme: bearer
+    json_mode: response_format_json_object
+    token_parameter: max_completion_tokens
+    models:
+      grok-3:
+        api_family: chat_completions
+        token_parameter: max_completion_tokens
+
+  azure_openai:
+    default_model: gpt-4.1
+    api_family: responses
+    endpoint_path: /responses
+    auth_scheme: api_key
+    auth_header_name: api-key
+    json_mode: prompt_only
+    token_parameter: max_output_tokens
+    models:
+      gpt-4.1:
+        api_family: responses
+        token_parameter: max_output_tokens
+      gpt-4.1-mini:
+        api_family: responses
+        token_parameter: max_output_tokens
+      gpt-5.4:
+        api_family: responses
+        token_parameter: max_output_tokens
+      gpt-5.4-mini:
+        api_family: responses
+        token_parameter: max_output_tokens
+
+  anthropic:
+    default_model: claude-3-5-sonnet
+    api_family: messages
+    endpoint_path: /messages
+    auth_scheme: anthropic
+    auth_header_name: x-api-key
+    version_header_name: anthropic-version
+    version_header_value: "2023-06-01"
+    json_mode: prompt_only
+    token_parameter: max_tokens
+    models:
+      claude-3-5-sonnet:
+        api_family: messages
+        token_parameter: max_tokens
+      claude-sonnet-4:
+        api_family: messages
+        token_parameter: max_tokens

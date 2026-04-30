@@ -15,6 +15,7 @@ RULES_DIR = Path(__file__).resolve().parent.parent / "rules"
 class RuleRegistry:
     summary_personas: dict[str, Any]
     llm_policies: dict[str, Any]
+    llm_provider_profiles: dict[str, Any]
     task_rules: dict[str, Any]
     prompt_scoring: dict[str, Any]
 
@@ -32,6 +33,7 @@ def get_rule_registry() -> RuleRegistry:
     return RuleRegistry(
         summary_personas=_load_yaml(RULES_DIR / "summary_personas.yaml"),
         llm_policies=_load_yaml(RULES_DIR / "llm_policies.yaml"),
+        llm_provider_profiles=_load_yaml(RULES_DIR / "llm_provider_profiles.yaml"),
         task_rules=_load_yaml(RULES_DIR / "task_rules.yaml"),
         prompt_scoring=_load_yaml(RULES_DIR / "prompt_scoring.yaml"),
     )

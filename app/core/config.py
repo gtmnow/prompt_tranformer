@@ -5,7 +5,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    database_url: str = "sqlite:///./prompt_transformer.db"
+    database_url: str | None = Field(default=None, alias="DATABASE_URL")
     app_env: str = "development"
     log_level: str = "INFO"
     port: int = 8000
@@ -22,6 +22,15 @@ class Settings(BaseSettings):
     require_service_auth: bool = False
     prompt_transformer_api_key: str = ""
     allowed_client_ids_raw: str = Field(default="hermanprompt", alias="ALLOWED_CLIENT_IDS")
+    shared_secret_vault_master_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "HERMAN_SHARED_SECRET_VAULT_MASTER_KEY",
+            "HERMAN_RUNTIME_SECRET_VAULT_MASTER_KEY",
+            "HERMAN_ADMIN_SECRET_VAULT_MASTER_KEY",
+        ),
+    )
+    shared_secret_vault_local_key_path: str = "./data/.secret_vault.key"
     structure_evaluator_enabled: bool = False
     structure_evaluator_api_key: str = Field(
         default="",

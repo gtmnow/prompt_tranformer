@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from app.schemas.transform import ConversationEnforcement, ConversationRequirement, ConversationState
+from app.services.runtime_llm import RuntimeLlmConfig
 from app.services.structure_evaluator import StructureEvaluationService
 
 
@@ -92,11 +93,13 @@ class PromptRequirementService:
         raw_prompt: str,
         conversation: Optional[ConversationState],
         enforcement_level: str,
+        runtime_config: RuntimeLlmConfig | None = None,
     ) -> tuple[ConversationState, list[str], Optional[str], "RequirementEvaluationTrace"]:
         requirements, evaluator_used, evaluator_coaching_tip, evaluation_trace = self._merge_requirements(
             raw_prompt=raw_prompt,
             conversation=conversation,
             enforcement_level=enforcement_level,
+            runtime_config=runtime_config,
         )
         blocking_fields = self._blocking_fields(
             requirements=requirements,
@@ -181,11 +184,13 @@ class PromptRequirementService:
         raw_prompt: str,
         conversation: Optional[ConversationState],
         enforcement_level: str,
+        runtime_config: RuntimeLlmConfig | None = None,
     ) -> tuple[dict[str, ConversationRequirement], bool, Optional[str], "RequirementEvaluationTrace"]:
         existing = conversation.requirements if conversation is not None else {}
         evaluator_payload = self.structure_evaluator.evaluate(
             raw_prompt=raw_prompt,
             enforcement_level=enforcement_level,
+            runtime_config=runtime_config,
         )
         merged_current: dict[str, ConversationRequirement] = {}
         merged_conversation: dict[str, ConversationRequirement] = {}

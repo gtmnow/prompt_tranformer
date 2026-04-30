@@ -8,6 +8,11 @@ from app.core.config import get_settings
 
 settings = get_settings()
 
+if not settings.database_url:
+    raise RuntimeError(
+        "DATABASE_URL is required. Prompt Transformer refuses to start without an explicit environment-provided database."
+    )
+
 connect_args = {}
 if settings.database_url.startswith("sqlite"):
     connect_args["check_same_thread"] = False

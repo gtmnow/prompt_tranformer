@@ -119,9 +119,12 @@ class TransformMetadata(BaseModel):
     persona_source: Literal["summary_override", "db_profile", "generic_default"]
     rules_applied: list[str]
     profile_version: str
+    requested_provider: str
     requested_model: str
+    resolved_provider: str
     resolved_model: str
     used_fallback_model: bool
+    used_authoritative_tenant_llm: bool = False
 
 
 class TransformPromptResponse(BaseModel):

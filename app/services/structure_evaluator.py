@@ -5,10 +5,11 @@ import logging
 import re
 from typing import Any, Optional
 
-import httpx
-
 from app.core.config import get_settings
 from app.core.logging import configure_application_logging
+from app.services.llm_gateway import LlmGatewayService
+from app.services.runtime_llm import RuntimeLlmConfig
+from app.services.llm_types import TransformerLlmRequest
 
 
 logger = logging.getLogger("prompt_transformer.structure_evaluator")
@@ -18,90 +19,79 @@ class StructureEvaluationService:
     def __init__(self) -> None:
         self.settings = get_settings()
         configure_application_logging(self.settings.log_level)
+        self.gateway = LlmGatewayService()
 
     def is_enabled(self) -> bool:
-        return bool(
-            self.settings.structure_evaluator_enabled
-            and self.settings.structure_evaluator_api_key
-            and self.settings.structure_evaluator_model
-        )
+        return bool(self.settings.structure_evaluator_enabled)
 
     def evaluate(
         self,
         *,
         raw_prompt: str,
         enforcement_level: str,
+        runtime_config: RuntimeLlmConfig | None = None,
     ) -> Optional[dict[str, Any]]:
         enabled = self.is_enabled()
-        if not enabled:
+        if not enabled or runtime_config is None:
             logger.info(
-                "structure_evaluator_skipped enabled=%s flag=%s api_key_present=%s model=%s",
+                "structure_evaluator_skipped enabled=%s flag=%s runtime_config_present=%s model=%s",
                 enabled,
                 self.settings.structure_evaluator_enabled,
-                bool(self.settings.structure_evaluator_api_key),
-                self.settings.structure_evaluator_model,
+                runtime_config is not None,
+                runtime_config.model if runtime_config is not None else None,
             )
             return None
 
         logger.info(
             "structure_evaluator_request model=%s base_url=%s prompt_chars=%s enforcement_level=%s",
-            self.settings.structure_evaluator_model,
-            self.settings.structure_evaluator_base_url,
+            runtime_config.model,
+            runtime_config.endpoint_url or self.settings.structure_evaluator_base_url,
             len(raw_prompt),
             enforcement_level,
         )
 
-        payload = {
-            "model": self.settings.structure_evaluator_model,
-            "input": [
-                {
-                    "role": "system",
-                    "content": [
-                        {
-                            "type": "input_text",
-                            "text": self._build_system_prompt(),
-                        }
-                    ],
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "input_text",
-                            "text": json.dumps(
-                                {
-                                    "prompt": raw_prompt,
-                                    "enforcement_level": enforcement_level,
-                                }
-                            ),
-                        }
-                    ],
-                },
-            ],
-            "temperature": 0,
-            "max_output_tokens": 300,
-            "store": False,
-        }
-        headers = {
-            "Authorization": f"Bearer {self.settings.structure_evaluator_api_key}",
-            "Content-Type": "application/json",
-        }
-
         try:
-            with httpx.Client(timeout=self.settings.structure_evaluator_timeout_seconds) as client:
-                response = client.post(
-                    f"{self.settings.structure_evaluator_base_url.rstrip('/')}/responses",
-                    headers=headers,
-                    json=payload,
+            gateway_request = TransformerLlmRequest(
+                provider=runtime_config.provider,  # type: ignore[arg-type]
+                model=runtime_config.model,
+                base_url=runtime_config.endpoint_url or self.settings.structure_evaluator_base_url,
+                api_key=runtime_config.api_key,
+                system_prompt=self._build_system_prompt(),
+                user_prompt=json.dumps(
+                    {
+                        "prompt": raw_prompt,
+                        "enforcement_level": enforcement_level,
+                    }
+                ),
+                max_output_tokens=300,
+                temperature=0,
+                expected_output="json",
+                timeout_seconds=self.settings.structure_evaluator_timeout_seconds,
+            )
+            response_payload, response_error = self.gateway.invoke(gateway_request)
+            if response_error is not None:
+                logger.warning(
+                    "structure_evaluator_llm_error provider=%s model=%s code=%s status_code=%s message=%s",
+                    response_error.provider,
+                    response_error.model,
+                    response_error.code,
+                    response_error.status_code,
+                    response_error.message,
                 )
-            response.raise_for_status()
-            response_payload = response.json()
-            text = self._extract_output_text(response_payload)
+                return None
+            if response_payload is None:
+                logger.warning("structure_evaluator_empty_gateway_response")
+                return None
+            text = response_payload.output_text
             if not text:
                 logger.warning(
                     "structure_evaluator_empty_output status_code=%s response_keys=%s",
-                    response.status_code,
-                    sorted(response_payload.keys()) if isinstance(response_payload, dict) else None,
+                    response_payload.status_code,
+                    (
+                        sorted(response_payload.raw_payload.keys())
+                        if isinstance(response_payload.raw_payload, dict)
+                        else None
+                    ),
                 )
                 return None
             parsed = self._parse_output_json(text)
@@ -113,7 +103,7 @@ class StructureEvaluationService:
                 return None
             logger.info(
                 "structure_evaluator_success status_code=%s returned_fields=%s",
-                response.status_code,
+                response_payload.status_code,
                 sorted(parsed.keys()),
             )
             field_diagnostics = {}
@@ -137,19 +127,6 @@ class StructureEvaluationService:
                 field_diagnostics,
             )
             return parsed
-        except httpx.HTTPStatusError as exc:
-            logger.warning(
-                "structure_evaluator_http_status_error status_code=%s response_text=%s",
-                exc.response.status_code,
-                exc.response.text[:500],
-            )
-            return None
-        except httpx.HTTPError as exc:
-            logger.warning(
-                "structure_evaluator_http_error error=%s",
-                str(exc),
-            )
-            return None
         except json.JSONDecodeError as exc:
             logger.warning(
                 "structure_evaluator_json_decode_error error=%s text_sample=%s",
@@ -163,8 +140,8 @@ class StructureEvaluationService:
                 str(exc),
                 self._truncate_for_log(text if "text" in locals() else None),
                 (
-                    sorted(response_payload.keys())
-                    if "response_payload" in locals() and isinstance(response_payload, dict)
+                    sorted(response_payload.raw_payload.keys())
+                    if "response_payload" in locals() and response_payload is not None and isinstance(response_payload.raw_payload, dict)
                     else None
                 ),
             )
@@ -210,40 +187,6 @@ class StructureEvaluationService:
             "Keep coaching_tip short, supportive, compact, and framed as coaching rather than a command."
         )
 
-    def _extract_output_text(self, payload: dict[str, Any]) -> str:
-        output_text = payload.get("output_text")
-        if isinstance(output_text, str) and output_text.strip():
-            return output_text.strip()
-
-        for key in ("text", "content"):
-            value = payload.get(key)
-            extracted = self._extract_text_value(value)
-            if extracted:
-                return extracted
-
-        output = payload.get("output", [])
-        if isinstance(output, list):
-            for item in output:
-                extracted = self._extract_text_value(item)
-                if extracted:
-                    return extracted
-        return ""
-
-    def _extract_text_value(self, value: Any) -> str:
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-        if isinstance(value, dict):
-            for key in ("text", "output_text", "content"):
-                extracted = self._extract_text_value(value.get(key))
-                if extracted:
-                    return extracted
-            return ""
-        if isinstance(value, list):
-            for item in value:
-                extracted = self._extract_text_value(item)
-                if extracted:
-                    return extracted
-        return ""
 
     def _parse_output_json(self, text: str) -> dict[str, Any]:
         candidates = [

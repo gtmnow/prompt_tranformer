@@ -22,8 +22,12 @@ class OpenAIAdapter(BaseLlmAdapter):
         headers = self._build_headers(request, profile)
         payload = self._build_payload(request, profile)
         try:
-            with httpx.Client(timeout=request.timeout_seconds) as client:
-                response = client.post(url, headers=headers, json=payload)
+            response = self._send_with_temperature_fallback(
+                url=url,
+                headers=headers,
+                payload=payload,
+                timeout_seconds=request.timeout_seconds,
+            )
             response_payload = response.json()
             response.raise_for_status()
             output_text = self._extract_output_text(profile, response_payload)
@@ -65,6 +69,46 @@ class OpenAIAdapter(BaseLlmAdapter):
                 code="INVALID_RESPONSE",
                 message=str(exc),
             )
+
+    def _send_with_temperature_fallback(
+        self,
+        *,
+        url: str,
+        headers: dict[str, str],
+        payload: dict[str, Any],
+        timeout_seconds: float,
+    ) -> httpx.Response:
+        with httpx.Client(timeout=timeout_seconds) as client:
+            response = client.post(url, headers=headers, json=payload)
+            if not self._should_retry_without_temperature(response, payload):
+                return response
+
+            retry_payload = dict(payload)
+            retry_payload.pop("temperature", None)
+            return client.post(url, headers=headers, json=retry_payload)
+
+    def _should_retry_without_temperature(
+        self,
+        response: httpx.Response,
+        payload: dict[str, Any],
+    ) -> bool:
+        if response.status_code != 400 or "temperature" not in payload:
+            return False
+
+        response_payload = self._safe_json(response)
+        if not isinstance(response_payload, dict):
+            return False
+
+        error_payload = response_payload.get("error")
+        if not isinstance(error_payload, dict):
+            return False
+
+        message = error_payload.get("message")
+        if not isinstance(message, str):
+            return False
+
+        normalized = message.lower()
+        return "temperature" in normalized and "unsupported parameter" in normalized
 
     def _build_headers(self, request: TransformerLlmRequest, profile: ResolvedLlmProviderProfile) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}

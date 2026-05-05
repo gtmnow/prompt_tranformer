@@ -31,7 +31,7 @@ class GuideMeGenerationService:
         request = TransformerLlmRequest(
             provider=runtime_config.provider,  # type: ignore[arg-type]
             model=runtime_config.model,
-            base_url=runtime_config.endpoint_url or "https://api.openai.com/v1",
+            base_url=self._resolve_base_url(runtime_config.endpoint_url, runtime_config.provider),
             api_key=runtime_config.api_key,
             system_prompt=self._build_system_prompt(helper_kind),
             user_prompt=prompt,
@@ -63,3 +63,15 @@ class GuideMeGenerationService:
             "Use concise string values unless the user prompt clearly asks for an array or nested object. "
             "Do not include fields that are unsupported by the request."
         )
+
+    def _resolve_base_url(self, endpoint_url: str | None, provider: str) -> str:
+        normalized = (endpoint_url or "").strip()
+        if normalized:
+            return normalized
+        defaults = {
+            "openai": "https://api.openai.com/v1",
+            "xai": "https://api.x.ai/v1",
+            "anthropic": "https://api.anthropic.com/v1",
+            "azure_openai": "https://api.openai.com/v1",
+        }
+        return defaults.get(provider.strip().casefold(), "https://api.openai.com/v1")

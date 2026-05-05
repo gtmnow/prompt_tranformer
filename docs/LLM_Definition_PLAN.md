@@ -57,7 +57,7 @@ This plan assumes:
 - Keep `tenant_llm_config` and `platform_managed_llm_configs` as the source of truth for org-assigned LLM selection.
 - Add a backend-only resolver in Herman Admin service code that can return an effective runtime LLM record for a given `user_id_hash` or `tenant_id`.
 - The resolver should:
-  - map `user_id_hash -> auth_users.tenant_id`
+  - resolve `user_id_hash -> user_tenant_membership.tenant_id` via the primary active membership, with `auth_users.tenant_id` treated as a derived compatibility pointer
   - load the tenant’s `tenant_llm_config`
   - require `credential_status == "valid"`
   - resolve the real API key from `secret_reference`
@@ -128,7 +128,7 @@ This plan assumes:
 
 ### 5. Operational behavior and edge cases
 - Tenant assignment changes should affect the next request after cache expiry or explicit invalidation.
-- User moved to a new tenant should inherit the new tenant’s LLM automatically through `auth_users.tenant_id`.
+- User moved to a new tenant should inherit the new tenant’s LLM automatically through the primary `user_tenant_membership`, with `auth_users.tenant_id` staying in sync as a derived pointer.
 - If transformation is disabled for a tenant:
   - Herman Prompt should bypass Prompt Transformer intentionally and record the bypass reason from tenant config.
 - If scoring is disabled for a tenant:

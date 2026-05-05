@@ -20,7 +20,10 @@ class Settings(BaseSettings):
     railway_seed_on_start: bool = False
     herman_db_canonical_mode: bool = False
     herman_db_version_table: str = "alembic_version"
-    herman_db_allowed_revisions_raw: str = "20260504_0006,20260504_0007,20260504_0008"
+    herman_db_allowed_revisions_raw: str = Field(
+        default="20260504_0006,20260504_0007,20260504_0008,20260504_0009,20260505_0010",
+        validation_alias=AliasChoices("HERMAN_DB_ALLOWED_REVISIONS", "HERMAN_DB_ALLOWED_REVISIONS_RAW"),
+    )
     host: str = "0.0.0.0"
     require_service_auth: bool = False
     prompt_transformer_api_key: str = ""

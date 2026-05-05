@@ -8,7 +8,7 @@ from typing import Any, Optional
 from app.core.config import get_settings
 from app.core.logging import configure_application_logging
 from app.services.llm_gateway import LlmGatewayService
-from app.services.llm_types import TransformerLlmRequest
+from app.services.llm_request_factory import LlmRequestFactory
 from app.services.runtime_llm import RuntimeLlmConfig
 from app.services.token_usage import build_usage_entry
 
@@ -21,6 +21,7 @@ class StructureEvaluationService:
         self.settings = get_settings()
         configure_application_logging(self.settings.log_level)
         self.gateway = LlmGatewayService()
+        self.request_factory = LlmRequestFactory()
 
     def is_enabled(self) -> bool:
         return bool(self.settings.structure_evaluator_enabled)
@@ -52,21 +53,11 @@ class StructureEvaluationService:
         )
 
         try:
-            gateway_request = TransformerLlmRequest(
-                provider=runtime_config.provider,  # type: ignore[arg-type]
-                model=runtime_config.model,
-                base_url=runtime_config.endpoint_url or self.settings.structure_evaluator_base_url,
-                api_key=runtime_config.api_key,
+            gateway_request = self.request_factory.build_structure_evaluator_request(
+                runtime_config=runtime_config,
                 system_prompt=self._build_system_prompt(),
-                user_prompt=json.dumps(
-                    {
-                        "prompt": raw_prompt,
-                        "enforcement_level": enforcement_level,
-                    }
-                ),
-                max_output_tokens=300,
-                temperature=0,
-                expected_output="json",
+                raw_prompt=raw_prompt,
+                enforcement_level=enforcement_level,
                 timeout_seconds=self.settings.structure_evaluator_timeout_seconds,
             )
             response_payload, response_error = self.gateway.invoke(gateway_request)

@@ -28,10 +28,12 @@ class AnthropicAdapter(BaseLlmAdapter):
             "model": request.model,
             profile.token_parameter: request.max_output_tokens,
             "temperature": request.temperature,
-            "messages": [{"role": "user", "content": request.user_prompt}],
+            "messages": self._build_messages(request),
         }
-        if profile.supports_system_prompt and request.system_prompt.strip():
-            payload["system"] = request.system_prompt
+        if profile.supports_system_prompt:
+            system_prompt = self._extract_system_prompt(request)
+            if system_prompt:
+                payload["system"] = system_prompt
 
         try:
             with httpx.Client(timeout=request.timeout_seconds) as client:
@@ -45,6 +47,7 @@ class AnthropicAdapter(BaseLlmAdapter):
                     provider=request.provider,
                     model=request.model,
                     output_text=output_text,
+                    generated_images=[],
                     status_code=response.status_code,
                     finish_reason=self._extract_finish_reason(response_payload),
                     usage=usage,
@@ -100,6 +103,33 @@ class AnthropicAdapter(BaseLlmAdapter):
         if isinstance(usage, dict):
             return usage
         return None
+
+    def _extract_system_prompt(self, request: TransformerLlmRequest) -> str:
+        for message in request.messages:
+            if message.role != "system":
+                continue
+            parts = [part.text.strip() for part in message.content if part.type == "text" and isinstance(part.text, str) and part.text.strip()]
+            if parts:
+                return "\n".join(parts)
+        return ""
+
+    def _build_messages(self, request: TransformerLlmRequest) -> list[dict[str, Any]]:
+        if request.tools:
+            raise ValueError("Anthropic adapter does not support tool requests in Prompt Transformer.")
+
+        messages: list[dict[str, Any]] = []
+        for message in request.messages:
+            if message.role == "system":
+                continue
+
+            content: list[dict[str, Any]] = []
+            for part in message.content:
+                if part.type != "text" or not isinstance(part.text, str) or not part.text.strip():
+                    raise ValueError("Anthropic adapter only supports text content in Prompt Transformer.")
+                content.append({"type": "text", "text": part.text})
+            if content:
+                messages.append({"role": message.role, "content": content})
+        return messages
 
     def _safe_json(self, response: httpx.Response) -> dict[str, Any] | list[Any] | None:
         try:

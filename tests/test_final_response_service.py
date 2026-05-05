@@ -1,76 +1,73 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
-from app.schemas.transform import ConversationHistoryTurn
-from app.services.final_response_service import _build_openai_like_payload, _extract_output_text
-from app.services.llm_provider_profiles import ResolvedLlmProviderProfile
-
-
-def _profile(*, api_family: str, token_parameter: str) -> ResolvedLlmProviderProfile:
-    return ResolvedLlmProviderProfile(
-        provider="xai" if api_family == "chat_completions" else "openai",
-        requested_model="test-model",
-        resolved_model="test-model",
-        api_family=api_family,
-        endpoint_path="/chat/completions" if api_family == "chat_completions" else "/responses",
-        auth_scheme="bearer",
-        auth_header_name=None,
-        version_header_name=None,
-        version_header_value=None,
-        json_mode="prompt_only",
-        token_parameter=token_parameter,
-        supports_system_prompt=True,
-        request_timeout_seconds=15.0,
-        raw={},
-    )
+from app.schemas.transform import AttachmentReference, ConversationHistoryTurn
+from app.services.final_response_service import FinalResponseService
+from app.services.llm_types import NormalizedTokenUsage, TransformerLlmResponse
+from app.services.runtime_llm import RuntimeLlmConfig
 
 
 class FinalResponseServiceTests(unittest.TestCase):
-    def test_build_openai_like_payload_uses_messages_for_chat_completions(self) -> None:
-        payload = _build_openai_like_payload(
-            profile=_profile(api_family="chat_completions", token_parameter="max_completion_tokens"),
-            model="grok-3",
-            conversation_history=[
-                ConversationHistoryTurn(
-                    transformed_text="Task: Summarize the email thread.",
-                    assistant_text="Here is the earlier summary.",
-                )
-            ],
-            transformed_prompt="Task: Write a concise reply.",
-            image_attachments=[],
-            document_attachments=[],
-            wants_image_generation=False,
-            max_output_tokens=800,
+    def test_generate_uses_gateway_and_maps_images_and_usage(self) -> None:
+        service = FinalResponseService()
+        runtime_config = RuntimeLlmConfig(
+            tenant_id="tenant_1",
+            user_id_hash="user_1",
+            provider="openai",
+            model="gpt-4.1",
+            endpoint_url="https://api.openai.com/v1",
+            api_key="test-key",
+            transformation_enabled=True,
+            scoring_enabled=True,
+            credential_status="valid",
+            source_kind="customer_managed",
         )
 
-        self.assertIn("messages", payload)
-        self.assertNotIn("input", payload)
-        self.assertEqual(
-            payload["messages"],
-            [
-                {"role": "user", "content": "Task: Summarize the email thread."},
-                {"role": "assistant", "content": "Here is the earlier summary."},
-                {"role": "user", "content": "Task: Write a concise reply."},
-            ],
-        )
-        self.assertEqual(payload["max_completion_tokens"], 800)
+        with patch.object(
+            service.gateway,
+            "invoke",
+            return_value=(
+                TransformerLlmResponse(
+                    provider="openai",
+                    model="gpt-4.1",
+                    output_text="Here is the answer.",
+                    generated_images=[{"media_type": "image/png", "base64_data": "abc123"}],
+                    normalized_usage=NormalizedTokenUsage(
+                        input_tokens=100,
+                        output_tokens=25,
+                        total_tokens=125,
+                    ),
+                ),
+                None,
+            ),
+        ) as invoke:
+            result = service.generate(
+                runtime_config=runtime_config,
+                resolved_model="gpt-4.1",
+                transformed_prompt="Task: Explain this clearly.",
+                conversation_history=[
+                    ConversationHistoryTurn(
+                        transformed_text="Task: summarize the earlier thread.",
+                        assistant_text="Earlier assistant reply.",
+                    )
+                ],
+                attachments=[
+                    AttachmentReference(
+                        id="att_1",
+                        kind="image",
+                        name="diagram.png",
+                        provider_file_id="file_123",
+                    )
+                ],
+            )
 
-    def test_extract_output_text_reads_chat_completions_message_content(self) -> None:
-        text = _extract_output_text(
-            {
-                "choices": [
-                    {
-                        "message": {
-                            "content": "Here is the xAI response.",
-                        }
-                    }
-                ]
-            },
-            profile=_profile(api_family="chat_completions", token_parameter="max_completion_tokens"),
-        )
-
-        self.assertEqual(text, "Here is the xAI response.")
+        invoke.assert_called_once()
+        self.assertEqual(result.text, "Here is the answer.")
+        self.assertEqual(len(result.generated_images), 1)
+        self.assertEqual(result.generated_images[0].base64_data, "abc123")
+        self.assertEqual(result.usage.total_tokens, 125)
 
 
 if __name__ == "__main__":

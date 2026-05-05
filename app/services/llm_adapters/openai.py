@@ -6,7 +6,12 @@ import httpx
 
 from app.services.llm_adapters.base import BaseLlmAdapter
 from app.services.llm_provider_profiles import ResolvedLlmProviderProfile
-from app.services.llm_types import TransformerLlmError, TransformerLlmRequest, TransformerLlmResponse
+from app.services.llm_types import (
+    TransformerLlmError,
+    TransformerLlmMessage,
+    TransformerLlmRequest,
+    TransformerLlmResponse,
+)
 from app.services.token_usage import normalize_usage
 
 
@@ -37,6 +42,7 @@ class OpenAIAdapter(BaseLlmAdapter):
                     provider=request.provider,
                     model=request.model,
                     output_text=output_text,
+                    generated_images=self._extract_generated_images(profile, response_payload),
                     status_code=response.status_code,
                     finish_reason=self._extract_finish_reason(profile, response_payload),
                     usage=usage,
@@ -121,9 +127,10 @@ class OpenAIAdapter(BaseLlmAdapter):
 
     def _build_payload(self, request: TransformerLlmRequest, profile: ResolvedLlmProviderProfile) -> dict[str, Any]:
         if profile.api_family == "chat_completions":
+            self._validate_chat_completion_request(request)
             payload: dict[str, Any] = {
                 "model": request.model,
-                "messages": self._build_messages(request, profile),
+                "messages": self._build_chat_messages(request, profile),
                 "temperature": request.temperature,
                 profile.token_parameter: request.max_output_tokens,
             }
@@ -138,13 +145,29 @@ class OpenAIAdapter(BaseLlmAdapter):
             profile.token_parameter: request.max_output_tokens,
             "store": False,
         }
+        if request.expected_output == "json":
+            payload["text"] = {"format": {"type": "json_object"}}
+        elif request.purpose != "final_response":
+            payload["text"] = {"format": {"type": "text"}}
+
+        tools = self._build_tools(request)
+        if tools:
+            payload["tools"] = tools
+            if any(tool.get("type") == "code_interpreter" for tool in tools) and not any(
+                tool.get("type") == "image_generation" for tool in tools
+            ):
+                payload["tool_choice"] = {"type": "code_interpreter"}
         return payload
 
-    def _build_messages(self, request: TransformerLlmRequest, profile: ResolvedLlmProviderProfile) -> list[dict[str, str]]:
+    def _build_chat_messages(self, request: TransformerLlmRequest, profile: ResolvedLlmProviderProfile) -> list[dict[str, str]]:
         messages: list[dict[str, str]] = []
-        if profile.supports_system_prompt and request.system_prompt.strip():
-            messages.append({"role": "system", "content": request.system_prompt})
-        messages.append({"role": "user", "content": request.user_prompt})
+        for message in request.messages:
+            if message.role == "system" and not profile.supports_system_prompt:
+                continue
+            text = self._flatten_text_content(message)
+            if not text:
+                continue
+            messages.append({"role": message.role, "content": text})
         return messages
 
     def _build_responses_input(
@@ -153,19 +176,15 @@ class OpenAIAdapter(BaseLlmAdapter):
         profile: ResolvedLlmProviderProfile,
     ) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
-        if profile.supports_system_prompt and request.system_prompt.strip():
+        for message in request.messages:
+            if message.role == "system" and not profile.supports_system_prompt:
+                continue
             items.append(
                 {
-                    "role": "system",
-                    "content": [{"type": "input_text", "text": request.system_prompt}],
+                    "role": message.role,
+                    "content": self._build_responses_content(message),
                 }
             )
-        items.append(
-            {
-                "role": "user",
-                "content": [{"type": "input_text", "text": request.user_prompt}],
-            }
-        )
         return items
 
     def _extract_output_text(self, profile: ResolvedLlmProviderProfile, payload: dict[str, Any]) -> str:
@@ -221,6 +240,65 @@ class OpenAIAdapter(BaseLlmAdapter):
         if isinstance(usage, dict):
             return usage
         return None
+
+    def _extract_generated_images(self, profile: ResolvedLlmProviderProfile, payload: dict[str, Any]) -> list[dict[str, Any]]:
+        if profile.api_family == "chat_completions":
+            return []
+
+        output = payload.get("output", [])
+        if not isinstance(output, list):
+            return []
+
+        images: list[dict[str, Any]] = []
+        for item in output:
+            if not isinstance(item, dict) or item.get("type") != "image_generation_call":
+                continue
+            result = item.get("result")
+            if isinstance(result, str) and result:
+                images.append({"media_type": "image/png", "base64_data": result})
+        return images
+
+    def _build_responses_content(self, message: TransformerLlmMessage) -> list[dict[str, Any]]:
+        content: list[dict[str, Any]] = []
+        for part in message.content:
+            if part.type == "text" and part.text is not None:
+                content_type = "output_text" if message.role == "assistant" else "input_text"
+                content.append({"type": content_type, "text": part.text})
+            elif part.type == "image_file" and part.file_id is not None:
+                content.append({"type": "input_image", "file_id": part.file_id})
+        return content
+
+    def _build_tools(self, request: TransformerLlmRequest) -> list[dict[str, Any]]:
+        tools: list[dict[str, Any]] = []
+        for tool in request.tools:
+            if tool.type == "code_interpreter":
+                tools.append(
+                    {
+                        "type": "code_interpreter",
+                        "container": {
+                            "type": "auto",
+                            "file_ids": tool.file_ids,
+                        },
+                    }
+                )
+            elif tool.type == "image_generation":
+                payload: dict[str, Any] = {"type": "image_generation"}
+                if tool.quality:
+                    payload["quality"] = tool.quality
+                tools.append(payload)
+        return tools
+
+    def _validate_chat_completion_request(self, request: TransformerLlmRequest) -> None:
+        if request.tools:
+            raise ValueError("Chat completions adapter does not support tool requests.")
+        for message in request.messages:
+            for part in message.content:
+                if part.type != "text":
+                    raise ValueError("Chat completions adapter only supports text content.")
+
+    def _flatten_text_content(self, message: TransformerLlmMessage) -> str:
+        parts = [part.text.strip() for part in message.content if part.type == "text" and isinstance(part.text, str) and part.text.strip()]
+        return "\n".join(parts).strip()
 
     def _safe_json(self, response: httpx.Response) -> dict[str, Any] | list[Any] | None:
         try:

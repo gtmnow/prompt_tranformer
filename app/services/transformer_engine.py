@@ -27,7 +27,7 @@ from app.services.prompt_scoring import PromptScoringService
 from app.services.request_logger import RequestLogger
 from app.services.runtime_llm import RuntimeLlmConfigError, RuntimeLlmResolver
 from app.services.task_inference import TaskInferenceService
-from app.services.token_usage import build_usage_entry, merge_usage, normalize_usage
+from app.services.token_usage import build_usage_entry, merge_usage
 
 
 logger = logging.getLogger("prompt_transformer.transformer_engine")
@@ -387,7 +387,7 @@ class TransformerEngine:
                     purpose="final_response",
                     provider=runtime_llm.provider,
                     model=transform_response.metadata.resolved_model,
-                    usage=normalize_usage(runtime_llm.provider, assistant_result.usage),
+                    usage=assistant_result.usage,
                 ),
             )
         return ExecuteChatResponse(

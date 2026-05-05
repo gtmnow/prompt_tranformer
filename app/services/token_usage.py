@@ -16,6 +16,9 @@ class TokenUsageProviderEntry(TypedDict):
     input_tokens: int | None
     output_tokens: int | None
     total_tokens: int | None
+    reasoning_tokens: int | None
+    cache_read_tokens: int | None
+    cache_write_tokens: int | None
     raw_usage: dict[str, Any] | None
 
 
@@ -144,6 +147,9 @@ def merge_usage(
         "input_tokens": _coerce_non_negative_int(usage.get("input_tokens")),
         "output_tokens": _coerce_non_negative_int(usage.get("output_tokens")),
         "total_tokens": _coerce_non_negative_int(usage.get("total_tokens")),
+        "reasoning_tokens": _coerce_non_negative_int(usage.get("reasoning_tokens")),
+        "cache_read_tokens": _coerce_non_negative_int(usage.get("cache_read_tokens")),
+        "cache_write_tokens": _coerce_non_negative_int(usage.get("cache_write_tokens")),
         "raw_usage": usage.get("raw_usage") if isinstance(usage.get("raw_usage"), dict) else None,
     }
     replaced = False

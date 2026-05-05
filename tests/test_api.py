@@ -616,6 +616,9 @@ def test_final_response_usage_endpoint_updates_request_token_usage(client) -> No
                 "input_tokens": 820,
                 "output_tokens": 260,
                 "total_tokens": 1080,
+                "reasoning_tokens": None,
+                "cache_read_tokens": None,
+                "cache_write_tokens": None,
                 "raw_usage": {
                     "prompt_tokens": 820,
                     "completion_tokens": 260,

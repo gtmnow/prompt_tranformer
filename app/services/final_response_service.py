@@ -6,7 +6,7 @@ from typing import Any
 import httpx
 
 from app.schemas.transform import AttachmentReference, ConversationHistoryTurn, GeneratedImagePayload
-from app.services.llm_provider_profiles import LlmProviderProfileService
+from app.services.llm_provider_profiles import LlmProviderProfileService, ResolvedLlmProviderProfile
 from app.services.runtime_llm import RuntimeLlmConfig
 
 
@@ -87,7 +87,8 @@ class FinalResponseService:
         profile = self.provider_profiles.resolve(runtime_config.provider, resolved_model)
         url = f"{_resolve_base_url(runtime_config.endpoint_url, runtime_config.provider).rstrip('/')}/{profile.endpoint_path.lstrip('/')}"
         headers = {"Authorization": f"Bearer {runtime_config.api_key}", "Content-Type": "application/json"}
-        payload = _build_responses_payload(
+        payload = _build_openai_like_payload(
+            profile=profile,
             model=resolved_model,
             conversation_history=conversation_history,
             transformed_prompt=transformed_prompt,
@@ -105,8 +106,8 @@ class FinalResponseService:
             raise ValueError(f"LLM provider request failed: {detail}")
 
         data = response.json()
-        text = _extract_output_text(data)
-        generated_images = _extract_generated_images(data)
+        text = _extract_output_text(data, profile=profile)
+        generated_images = _extract_generated_images(data, profile=profile)
         if not text and generated_images:
             text = "Generated image attached."
         if not text and not generated_images:
@@ -116,8 +117,9 @@ class FinalResponseService:
         return FinalResponseResult(text=text, generated_images=generated_images, usage=usage)
 
 
-def _build_responses_payload(
+def _build_openai_like_payload(
     *,
+    profile: ResolvedLlmProviderProfile,
     model: str,
     conversation_history: list[ConversationHistoryTurn],
     transformed_prompt: str,
@@ -126,14 +128,27 @@ def _build_responses_payload(
     wants_image_generation: bool,
     max_output_tokens: int,
 ) -> dict[str, Any]:
-    payload: dict[str, Any] = {
+    if profile.api_family == "chat_completions":
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": _build_messages(
+                conversation_history=conversation_history,
+                transformed_prompt=transformed_prompt,
+            ),
+            profile.token_parameter: max_output_tokens,
+        }
+        if _supports_temperature_parameter(model):
+            payload["temperature"] = 0.2
+        return payload
+
+    payload = {
         "model": model,
         "input": _build_input_items(
             conversation_history=conversation_history,
             transformed_prompt=transformed_prompt,
             image_attachments=image_attachments,
         ),
-        "max_output_tokens": max_output_tokens,
+        profile.token_parameter: max_output_tokens,
         "store": False,
     }
 
@@ -150,6 +165,19 @@ def _build_responses_payload(
             payload["tool_choice"] = {"type": "code_interpreter"}
 
     return payload
+
+
+def _build_messages(
+    *,
+    conversation_history: list[ConversationHistoryTurn],
+    transformed_prompt: str,
+) -> list[dict[str, str]]:
+    messages: list[dict[str, str]] = []
+    for turn in conversation_history:
+        messages.append({"role": "user", "content": turn.transformed_text})
+        messages.append({"role": "assistant", "content": turn.assistant_text})
+    messages.append({"role": "user", "content": transformed_prompt})
+    return messages
 
 
 def _build_tools(
@@ -198,7 +226,21 @@ def _build_input_items(
     return input_items
 
 
-def _extract_output_text(payload: dict[str, Any]) -> str:
+def _extract_output_text(payload: dict[str, Any], *, profile: ResolvedLlmProviderProfile) -> str:
+    if profile.api_family == "chat_completions":
+        choices = payload.get("choices")
+        if isinstance(choices, list):
+            for item in choices:
+                if not isinstance(item, dict):
+                    continue
+                message = item.get("message")
+                if not isinstance(message, dict):
+                    continue
+                content = message.get("content")
+                if isinstance(content, str) and content.strip():
+                    return content.strip()
+        return ""
+
     output_text = payload.get("output_text")
     if isinstance(output_text, str) and output_text.strip():
         return output_text.strip()
@@ -219,7 +261,10 @@ def _extract_output_text(payload: dict[str, Any]) -> str:
     return ""
 
 
-def _extract_generated_images(payload: dict[str, Any]) -> list[GeneratedImagePayload]:
+def _extract_generated_images(payload: dict[str, Any], *, profile: ResolvedLlmProviderProfile) -> list[GeneratedImagePayload]:
+    if profile.api_family == "chat_completions":
+        return []
+
     output = payload.get("output", [])
     if not isinstance(output, list):
         return []

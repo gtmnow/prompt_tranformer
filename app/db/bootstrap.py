@@ -7,6 +7,8 @@ from alembic.config import Config
 
 from app.core.config import get_settings
 from app.db.seed import run_seed
+from app.db.session import engine
+from app.schema_contract import validate_schema_contract
 
 
 def _alembic_config() -> Config:
@@ -19,7 +21,13 @@ def _alembic_config() -> Config:
 
 def bootstrap_database() -> None:
     settings = get_settings()
-    if settings.railway_auto_migrate:
+    if settings.effective_herman_db_canonical_mode:
+        validate_schema_contract(
+            engine=engine,
+            version_table=settings.herman_db_version_table,
+            allowed_revisions=settings.herman_db_allowed_revisions,
+        )
+    elif settings.railway_auto_migrate:
         command.upgrade(_alembic_config(), "head")
     if settings.railway_seed_on_start:
         run_seed()

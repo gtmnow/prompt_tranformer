@@ -13,6 +13,14 @@ from app.models.profile import (
     TypeDetailProfile,
 )
 from app.models.prompt_score import ConversationPromptScore
+from app.models.rag import (
+    RagChunk,
+    RagCollection,
+    RagDocument,
+    RagDocumentBlob,
+    RagQuotaPolicy,
+    RagRetrievalEvent,
+)
 from app.models.request_log import PromptTransformRequest
 
 

@@ -24,6 +24,8 @@ from app.services.pii_checks import PIICheckService
 from app.services.profile_resolver import ProfileResolver
 from app.services.prompt_requirements import PromptRequirementService
 from app.services.prompt_scoring import PromptScoringService
+from app.services.rag_prompt_assembly_service import RagPromptAssemblyService
+from app.services.rag_retrieval_service import RagRetrievalService
 from app.services.request_logger import RequestLogger
 from app.services.runtime_llm import RuntimeLlmConfigError, RuntimeLlmResolver
 from app.services.task_inference import TaskInferenceService
@@ -60,6 +62,8 @@ class TransformerEngine:
         self.runtime_llm = RuntimeLlmResolver(db_session)
         self.final_response_service = FinalResponseService()
         self.guide_me_generation = GuideMeGenerationService()
+        self.rag_retrieval = RagRetrievalService(db_session)
+        self.rag_prompt_assembly = RagPromptAssemblyService()
 
     def transform(self, payload: TransformPromptRequest) -> TransformPromptResponse:
         started_at = time.perf_counter()
@@ -271,14 +275,7 @@ class TransformerEngine:
                 if not runtime_llm.transformation_enabled
                 else "prompt_transform_disabled"
             )
-            assistant_result = self.final_response_service.generate(
-                runtime_config=runtime_llm,
-                resolved_model=runtime_llm.model,
-                transformed_prompt=payload.raw_prompt,
-                conversation_history=payload.conversation_history,
-                attachments=payload.attachments,
-            )
-            metadata = TransformMetadata(
+            bypass_metadata = TransformMetadata(
                 execution_owner="transformer",
                 persona_source="bypassed",
                 rules_applied=[],
@@ -296,6 +293,21 @@ class TransformerEngine:
                 bypass_reason=bypass_reason,
                 request_log_id=None,
             )
+            assistant_result = self.final_response_service.generate(
+                runtime_config=runtime_llm,
+                resolved_model=runtime_llm.model,
+                transformed_prompt=payload.raw_prompt,
+                conversation_history=payload.conversation_history,
+                attachments=payload.attachments,
+                reference_context=self._build_reference_context_for_prompt(
+                    tenant_id=runtime_llm.tenant_id,
+                    conversation_id=payload.conversation_id,
+                    user_id_hash=payload.user_id_hash,
+                    raw_prompt=payload.raw_prompt,
+                    conversation_history=payload.conversation_history,
+                    metadata=bypass_metadata,
+                ),
+            )
             return ExecuteChatResponse(
                 session_id=payload.session_id,
                 conversation_id=payload.conversation_id,
@@ -310,7 +322,7 @@ class TransformerEngine:
                 conversation=payload.conversation,
                 findings=[],
                 scoring=None,
-                metadata=metadata,
+                metadata=bypass_metadata,
             )
 
         transform_response = self.transform(
@@ -378,6 +390,7 @@ class TransformerEngine:
             transformed_prompt=transform_response.transformed_prompt or payload.raw_prompt,
             conversation_history=payload.conversation_history,
             attachments=payload.attachments,
+            reference_context=self._build_reference_context(runtime_llm.tenant_id, payload, transform_response),
         )
         if transform_response.metadata.request_log_id is not None:
             self.request_logger.set_final_response_usage(
@@ -405,6 +418,50 @@ class TransformerEngine:
             findings=transform_response.findings,
             scoring=transform_response.scoring,
             metadata=transform_response.metadata,
+        )
+
+    def _build_reference_context(
+        self,
+        tenant_id: str,
+        payload: ExecuteChatRequest,
+        transform_response: TransformPromptResponse,
+    ) -> str | None:
+        return self._build_reference_context_for_prompt(
+            tenant_id=tenant_id,
+            conversation_id=payload.conversation_id,
+            user_id_hash=payload.user_id_hash,
+            raw_prompt=payload.raw_prompt,
+            conversation_history=payload.conversation_history,
+            metadata=transform_response.metadata,
+        )
+
+    def _build_reference_context_for_prompt(
+        self,
+        *,
+        tenant_id: str,
+        conversation_id: str,
+        user_id_hash: str,
+        raw_prompt: str,
+        conversation_history: list,
+        metadata: TransformMetadata,
+    ) -> str | None:
+        retrieval = self.rag_retrieval.retrieve(
+            tenant_id=tenant_id,
+            user_id_hash=user_id_hash,
+            conversation_id=conversation_id,
+            raw_prompt=raw_prompt,
+            conversation_history=conversation_history,
+        )
+        metadata.retrieval_used = bool(retrieval.assembled_references)
+        metadata.retrieval_scope_counts = {
+            "tenant": retrieval.tenant_chunk_count,
+            "user": retrieval.user_chunk_count,
+        }
+        metadata.retrieval_document_count = retrieval.document_count
+        if not retrieval.assembled_references:
+            return None
+        return self.rag_prompt_assembly.assemble(
+            references=retrieval.assembled_references,
         )
 
     def generate_guide_me_helper(self, payload: GuideMeHelperRequest) -> GuideMeHelperResponse:

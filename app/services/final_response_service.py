@@ -56,13 +56,15 @@ class FinalResponseService:
         transformed_prompt: str,
         conversation_history: list[ConversationHistoryTurn],
         attachments: list[AttachmentReference],
+        reference_context: str | None = None,
     ) -> FinalResponseResult:
+        final_prompt = transformed_prompt if not reference_context else f"{reference_context}\n\n{transformed_prompt}"
         provider = runtime_config.provider.strip().casefold()
         if provider in {"openai", "xai"}:
             return self._generate_openai_like_response(
                 runtime_config=runtime_config,
                 resolved_model=resolved_model,
-                transformed_prompt=transformed_prompt,
+                transformed_prompt=final_prompt,
                 conversation_history=conversation_history,
                 attachments=attachments,
             )

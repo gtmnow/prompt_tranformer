@@ -136,6 +136,9 @@ class TransformMetadata(BaseModel):
     transformation_applied: bool = True
     bypass_reason: Optional[str] = None
     request_log_id: Optional[int] = Field(default=None, ge=1)
+    retrieval_used: bool = False
+    retrieval_scope_counts: dict[str, int] = Field(default_factory=dict)
+    retrieval_document_count: int = 0
 
 
 class TokenUsageWritePayload(BaseModel):
@@ -247,3 +250,91 @@ class GuideMeHelperResponse(BaseModel):
     user_id_hash: str
     helper_kind: GuideMeHelperKind
     payload: dict
+
+
+RagScopeType = Literal["tenant", "user"]
+RagPolicySource = Literal["Default", "Service Tier", "Organization Override"]
+RagDocumentStatus = Literal["pending", "processing", "ready", "failed", "disabled"]
+
+
+class RagUsageSummary(BaseModel):
+    document_count: int = Field(ge=0)
+    total_bytes: int = Field(ge=0)
+    ready_documents: int = Field(ge=0)
+    processing_documents: int = Field(ge=0)
+    failed_documents: int = Field(ge=0)
+    disabled_documents: int = Field(ge=0)
+
+
+class EffectiveRagQuota(BaseModel):
+    scope: RagScopeType
+    policy_source: RagPolicySource
+    policy_key: str
+    max_file_bytes: int = Field(ge=0)
+    max_document_count: int = Field(ge=0)
+    max_total_bytes: int = Field(ge=0)
+    max_extracted_text_bytes: int = Field(ge=0)
+    max_chunks_per_document: int = Field(ge=0)
+    max_retrieved_chunks: int = Field(ge=0)
+    max_retrieved_chunks_total: int = Field(ge=0)
+
+
+class RagCollectionSummary(BaseModel):
+    id: str
+    scope_type: RagScopeType
+    tenant_id: str
+    user_id_hash: str | None = None
+    name: str
+    is_active: bool
+    retrieval_enabled: bool
+    max_results: int | None = None
+
+
+class RagDocumentSummary(BaseModel):
+    id: str
+    collection_id: str
+    scope_type: RagScopeType
+    tenant_id: str
+    user_id_hash: str | None = None
+    filename: str
+    media_type: str
+    size_bytes: int = Field(ge=0)
+    status: RagDocumentStatus
+    status_message: str | None = None
+    uploaded_by_admin_user_id: str | None = None
+    uploaded_by_user_id_hash: str | None = None
+    uploaded_at: str
+    processed_at: str | None = None
+    disabled_at: str | None = None
+
+
+class RagLimitsResponse(BaseModel):
+    limits: EffectiveRagQuota
+    usage: RagUsageSummary
+
+
+class RagDocumentListResponse(BaseModel):
+    collection: RagCollectionSummary
+    limits: EffectiveRagQuota
+    usage: RagUsageSummary
+    documents: list[RagDocumentSummary] = Field(default_factory=list)
+
+
+class RagDocumentMutationResponse(BaseModel):
+    collection: RagCollectionSummary
+    limits: EffectiveRagQuota
+    usage: RagUsageSummary
+    document: RagDocumentSummary
+
+
+class RagDocumentDeleteResponse(BaseModel):
+    deleted_document_id: str
+    collection: RagCollectionSummary
+    limits: EffectiveRagQuota
+    usage: RagUsageSummary
+
+
+class RagCollectionUpdateRequest(BaseModel):
+    retrieval_enabled: bool | None = None
+    is_active: bool | None = None
+    max_results: int | None = Field(default=None, ge=1, le=20)

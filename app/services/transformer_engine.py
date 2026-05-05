@@ -410,18 +410,57 @@ class TransformerEngine:
     def generate_guide_me_helper(self, payload: GuideMeHelperRequest) -> GuideMeHelperResponse:
         try:
             runtime_llm = self.runtime_llm.resolve(payload.user_id_hash)
-            helper_payload = self.guide_me_generation.generate(
+            request_row = self.request_logger.log(
+                {
+                    "session_id": payload.session_id,
+                    "conversation_id": payload.conversation_id,
+                    "user_id_hash": payload.user_id_hash,
+                    "raw_prompt": payload.prompt,
+                    "transformed_prompt": None,
+                    "task_type": "guide_me",
+                    "result_type": "transformed",
+                    "coaching_tip": None,
+                    "blocking_message": None,
+                    "target_provider": runtime_llm.provider,
+                    "target_model": runtime_llm.model,
+                    "persona_source": "bypassed",
+                    "used_fallback_model": False,
+                    "enforcement_level": "none",
+                    "compliance_check_enabled": False,
+                    "pii_check_enabled": False,
+                    "conversation_json": {},
+                    "findings_json": [],
+                    "metadata_json": {
+                        "request_kind": "guide_me",
+                        "helper_kind": payload.helper_kind,
+                        "resolved_provider": runtime_llm.provider,
+                        "resolved_model": runtime_llm.model,
+                    },
+                    "token_usage_json": None,
+                }
+            )
+            helper_result = self.guide_me_generation.generate(
                 helper_kind=payload.helper_kind,
                 prompt=payload.prompt,
                 runtime_config=runtime_llm,
                 max_output_tokens=payload.max_output_tokens,
+            )
+            self.request_logger.append_usage(
+                request_row.id,
+                build_usage_entry(
+                    category="admin",
+                    purpose="guide_me",
+                    provider=runtime_llm.provider,
+                    model=runtime_llm.model,
+                    usage=helper_result.usage,
+                ),
             )
             return GuideMeHelperResponse(
                 session_id=payload.session_id,
                 conversation_id=payload.conversation_id,
                 user_id_hash=payload.user_id_hash,
                 helper_kind=payload.helper_kind,
-                payload=helper_payload,
+                payload=helper_result.payload,
             )
         except RuntimeLlmConfigError as exc:
             raise ValueError(str(exc)) from exc

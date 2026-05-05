@@ -1,0 +1,58 @@
+from __future__ import annotations
+
+import unittest
+from unittest.mock import patch
+
+from app.services.guide_me_generation import GuideMeGenerationService
+from app.services.llm_types import NormalizedTokenUsage, TransformerLlmResponse
+from app.services.runtime_llm import RuntimeLlmConfig
+
+
+class GuideMeGenerationServiceTests(unittest.TestCase):
+    def test_generate_returns_payload_and_usage(self) -> None:
+        service = GuideMeGenerationService()
+        runtime_config = RuntimeLlmConfig(
+            tenant_id="tenant_1",
+            user_id_hash="user_1",
+            provider="openai",
+            model="gpt-4.1",
+            endpoint_url="https://api.openai.com/v1",
+            api_key="test-key",
+            transformation_enabled=True,
+            scoring_enabled=True,
+            credential_status="valid",
+            source_kind="customer_managed",
+        )
+
+        with patch.object(
+            service.gateway,
+            "invoke",
+            return_value=(
+                TransformerLlmResponse(
+                    provider="openai",
+                    model="gpt-4.1",
+                    output_text='{"task":"Reduce unqualified applicants by 30%."}',
+                    normalized_usage=NormalizedTokenUsage(
+                        input_tokens=90,
+                        output_tokens=30,
+                        total_tokens=120,
+                    ),
+                ),
+                None,
+            ),
+        ) as invoke:
+            result = service.generate(
+                helper_kind="answer_extraction",
+                prompt="Return strict JSON with the best task field.",
+                runtime_config=runtime_config,
+                max_output_tokens=400,
+            )
+
+        invoke.assert_called_once()
+        self.assertEqual(result.payload["task"], "Reduce unqualified applicants by 30%.")
+        self.assertIsNotNone(result.usage)
+        self.assertEqual(result.usage.total_tokens, 120)
+
+
+if __name__ == "__main__":
+    unittest.main()

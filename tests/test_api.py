@@ -1,15 +1,35 @@
+from unittest.mock import patch
+
 from app.db.seed import PROFILE_ROWS
 from app.models.profile import FinalProfile
 from app.models.prompt_score import ConversationPromptScore
 from app.models.request_log import PromptTransformRequest
 from app.core.config import get_settings
 from app.db.session import get_db
+from app.services.guide_me_generation import GuideMeGenerationResult
+from app.services.llm_types import NormalizedTokenUsage
+from app.services.runtime_llm import RuntimeLlmConfig
 
 
 AUTH_HEADERS = {
     "Authorization": "Bearer test-transformer-key",
     "X-Client-Id": "hermanprompt",
 }
+
+
+def _runtime_config(*, scoring_enabled: bool = True) -> RuntimeLlmConfig:
+    return RuntimeLlmConfig(
+        tenant_id="tenant_1",
+        user_id_hash="user_1",
+        provider="openai",
+        model="gpt-4.1",
+        endpoint_url="https://api.openai.com/v1",
+        api_key="test-key",
+        transformation_enabled=True,
+        scoring_enabled=scoring_enabled,
+        credential_status="valid",
+        source_kind="customer_managed",
+    )
 
 
 def _seed_final_profiles(client) -> None:
@@ -678,6 +698,201 @@ def test_final_response_usage_endpoint_is_idempotent_for_same_request(client) ->
         assert log_row.token_usage_json["final_response"]["output_tokens"] == 260
         assert log_row.token_usage_json["final_response"]["total_tokens"] == 1080
         assert log_row.token_usage_json["final_response"]["calls"] == 1
+    finally:
+        db.close()
+
+
+def test_guide_me_helper_persists_admin_token_usage(client) -> None:
+    with (
+        patch("app.services.transformer_engine.RuntimeLlmResolver.resolve", return_value=_runtime_config()),
+        patch(
+            "app.services.transformer_engine.GuideMeGenerationService.generate",
+            return_value=GuideMeGenerationResult(
+                payload={"task": "Reduce unqualified applicants by 30%."},
+                usage=NormalizedTokenUsage(
+                    input_tokens=120,
+                    output_tokens=45,
+                    total_tokens=165,
+                ),
+            ),
+        ),
+    ):
+        response = client.post(
+            "/api/guide_me/generate",
+            headers=AUTH_HEADERS,
+            json={
+                "session_id": "sess_guide_usage",
+                "conversation_id": "conv_guide_usage",
+                "user_id_hash": "user_1",
+                "target_llm": {"provider": "openai", "model": "gpt-4.1"},
+                "helper_kind": "answer_extraction",
+                "prompt": "Return strict JSON with optional keys who, task, context, output.",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["payload"]["task"] == "Reduce unqualified applicants by 30%."
+
+    db = next(client.app.dependency_overrides[get_db]())
+    try:
+        log_row = (
+            db.query(PromptTransformRequest)
+            .filter_by(session_id="sess_guide_usage", conversation_id="conv_guide_usage")
+            .one()
+        )
+        assert log_row.task_type == "guide_me"
+        assert log_row.result_type == "transformed"
+        assert log_row.metadata_json["request_kind"] == "guide_me"
+        assert log_row.metadata_json["helper_kind"] == "answer_extraction"
+        assert log_row.metadata_json["resolved_provider"] == "openai"
+        assert log_row.metadata_json["resolved_model"] == "gpt-4.1"
+        assert log_row.token_usage_json["admin"]["input_tokens"] == 120
+        assert log_row.token_usage_json["admin"]["output_tokens"] == 45
+        assert log_row.token_usage_json["admin"]["total_tokens"] == 165
+        assert log_row.token_usage_json["admin"]["calls"] == 1
+        assert log_row.token_usage_json["admin"]["by_purpose"]["guide_me"]["total_tokens"] == 165
+        assert log_row.token_usage_json["providers"] == [
+            {
+                "category": "admin",
+                "purpose": "guide_me",
+                "provider": "openai",
+                "model": "gpt-4.1",
+                "input_tokens": 120,
+                "output_tokens": 45,
+                "total_tokens": 165,
+                "reasoning_tokens": None,
+                "cache_read_tokens": None,
+                "cache_write_tokens": None,
+                "raw_usage": None,
+            }
+        ]
+    finally:
+        db.close()
+
+
+def test_request_logger_append_usage_preserves_existing_categories(client) -> None:
+    db = next(client.app.dependency_overrides[get_db]())
+    try:
+        request_row = PromptTransformRequest(
+            session_id="sess_usage_merge",
+            conversation_id="conv_usage_merge",
+            user_id_hash="user_1",
+            raw_prompt="Prompt",
+            transformed_prompt=None,
+            task_type="guide_me",
+            result_type="transformed",
+            coaching_tip=None,
+            blocking_message=None,
+            target_provider="openai",
+            target_model="gpt-4.1",
+            persona_source="bypassed",
+            used_fallback_model=False,
+            enforcement_level="none",
+            compliance_check_enabled=False,
+            pii_check_enabled=False,
+            conversation_json={},
+            findings_json=[],
+            metadata_json={"request_kind": "guide_me"},
+            token_usage_json={
+                "final_response": {
+                    "input_tokens": 820,
+                    "output_tokens": 260,
+                    "total_tokens": 1080,
+                    "calls": 1,
+                    "by_purpose": {
+                        "final_response": {
+                            "input_tokens": 820,
+                            "output_tokens": 260,
+                            "total_tokens": 1080,
+                            "calls": 1,
+                        }
+                    },
+                },
+                "providers": [
+                    {
+                        "category": "final_response",
+                        "purpose": "final_response",
+                        "provider": "openai",
+                        "model": "gpt-4.1",
+                        "input_tokens": 820,
+                        "output_tokens": 260,
+                        "total_tokens": 1080,
+                        "reasoning_tokens": None,
+                        "cache_read_tokens": None,
+                        "cache_write_tokens": None,
+                        "raw_usage": None,
+                    }
+                ],
+            },
+        )
+        db.add(request_row)
+        db.commit()
+        db.refresh(request_row)
+
+        from app.services.request_logger import RequestLogger
+        from app.services.token_usage import build_usage_entry
+
+        RequestLogger(db).append_usage(
+            request_row.id,
+            build_usage_entry(
+                category="admin",
+                purpose="guide_me",
+                provider="openai",
+                model="gpt-4.1",
+                usage=NormalizedTokenUsage(
+                    input_tokens=120,
+                    output_tokens=45,
+                    total_tokens=165,
+                ),
+            ),
+        )
+
+        db.refresh(request_row)
+        assert request_row.token_usage_json["final_response"]["total_tokens"] == 1080
+        assert request_row.token_usage_json["admin"]["total_tokens"] == 165
+        assert request_row.token_usage_json["admin"]["by_purpose"]["guide_me"]["total_tokens"] == 165
+        assert len(request_row.token_usage_json["providers"]) == 2
+    finally:
+        db.close()
+
+
+def test_guide_me_helper_creates_request_row_without_admin_usage_when_provider_usage_missing(client) -> None:
+    with (
+        patch("app.services.transformer_engine.RuntimeLlmResolver.resolve", return_value=_runtime_config()),
+        patch(
+            "app.services.transformer_engine.GuideMeGenerationService.generate",
+            return_value=GuideMeGenerationResult(
+                payload={"task": "Reduce unqualified applicants by 30%."},
+                usage=None,
+            ),
+        ),
+    ):
+        response = client.post(
+            "/api/guide_me/generate",
+            headers=AUTH_HEADERS,
+            json={
+                "session_id": "sess_guide_no_usage",
+                "conversation_id": "conv_guide_no_usage",
+                "user_id_hash": "user_1",
+                "target_llm": {"provider": "openai", "model": "gpt-4.1"},
+                "helper_kind": "answer_extraction",
+                "prompt": "Return strict JSON with optional keys who, task, context, output.",
+            },
+        )
+
+    assert response.status_code == 200
+
+    db = next(client.app.dependency_overrides[get_db]())
+    try:
+        log_row = (
+            db.query(PromptTransformRequest)
+            .filter_by(session_id="sess_guide_no_usage", conversation_id="conv_guide_no_usage")
+            .one()
+        )
+        assert log_row.task_type == "guide_me"
+        assert log_row.result_type == "transformed"
+        assert log_row.metadata_json["request_kind"] == "guide_me"
+        assert log_row.token_usage_json is None
     finally:
         db.close()
 

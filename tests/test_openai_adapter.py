@@ -85,6 +85,7 @@ def test_openai_adapter_builds_final_response_payload_with_tools_and_images() ->
                 content=[
                     TransformerLlmContentPart(type="text", text="Create image options."),
                     TransformerLlmContentPart(type="image_file", file_id="file_img"),
+                    TransformerLlmContentPart(type="document_file", file_id="file_doc_2"),
                 ],
             )
         ],
@@ -98,5 +99,6 @@ def test_openai_adapter_builds_final_response_payload_with_tools_and_images() ->
     payload = adapter._build_payload(request, profile)  # type: ignore[attr-defined]
 
     assert payload["input"][0]["content"][1] == {"type": "input_image", "file_id": "file_img"}
+    assert payload["input"][0]["content"][2] == {"type": "input_file", "file_id": "file_doc_2"}
     assert payload["tools"][0]["type"] == "code_interpreter"
     assert payload["tools"][1]["type"] == "image_generation"

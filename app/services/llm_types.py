@@ -9,7 +9,7 @@ LlmProvider = Literal["openai", "xai", "azure_openai", "anthropic"]
 ExpectedOutput = Literal["text", "json"]
 LlmRequestPurpose = Literal["structure_evaluator", "guide_me", "final_response"]
 LlmMessageRole = Literal["system", "user", "assistant"]
-LlmContentPartType = Literal["text", "image_file"]
+LlmContentPartType = Literal["text", "image_file", "document_file"]
 LlmToolType = Literal["code_interpreter", "image_generation"]
 
 
@@ -22,8 +22,8 @@ class TransformerLlmContentPart(BaseModel):
     def validate_shape(self) -> "TransformerLlmContentPart":
         if self.type == "text" and not (self.text or "").strip():
             raise ValueError("Text content parts require text.")
-        if self.type == "image_file" and not (self.file_id or "").strip():
-            raise ValueError("Image file content parts require file_id.")
+        if self.type in {"image_file", "document_file"} and not (self.file_id or "").strip():
+            raise ValueError("File content parts require file_id.")
         return self
 
 

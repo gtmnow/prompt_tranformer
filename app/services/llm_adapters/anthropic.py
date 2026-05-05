@@ -24,6 +24,8 @@ class AnthropicAdapter(BaseLlmAdapter):
             (profile.auth_header_name or "x-api-key"): request.api_key,
             (profile.version_header_name or "anthropic-version"): profile.version_header_value or "2023-06-01",
         }
+        if self._requires_files_beta(request):
+            headers["anthropic-beta"] = "files-api-2025-04-14"
         payload = {
             "model": request.model,
             profile.token_parameter: request.max_output_tokens,
@@ -124,12 +126,26 @@ class AnthropicAdapter(BaseLlmAdapter):
 
             content: list[dict[str, Any]] = []
             for part in message.content:
-                if part.type != "text" or not isinstance(part.text, str) or not part.text.strip():
-                    raise ValueError("Anthropic adapter only supports text content in Prompt Transformer.")
-                content.append({"type": "text", "text": part.text})
+                if part.type == "text":
+                    if not isinstance(part.text, str) or not part.text.strip():
+                        raise ValueError("Anthropic text content requires text.")
+                    content.append({"type": "text", "text": part.text})
+                elif part.type == "image_file":
+                    if not part.file_id:
+                        raise ValueError("Anthropic image content requires file_id.")
+                    content.append({"type": "image", "source": {"type": "file", "file_id": part.file_id}})
+                elif part.type == "document_file":
+                    if not part.file_id:
+                        raise ValueError("Anthropic document content requires file_id.")
+                    content.append({"type": "document", "source": {"type": "file", "file_id": part.file_id}})
+                else:
+                    raise ValueError("Anthropic adapter received unsupported content type.")
             if content:
                 messages.append({"role": message.role, "content": content})
         return messages
+
+    def _requires_files_beta(self, request: TransformerLlmRequest) -> bool:
+        return any(part.type in {"image_file", "document_file"} for message in request.messages for part in message.content)
 
     def _safe_json(self, response: httpx.Response) -> dict[str, Any] | list[Any] | None:
         try:

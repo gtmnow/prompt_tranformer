@@ -134,14 +134,20 @@ class LlmRequestFactory:
         image_file_ids = [attachment.provider_file_id for attachment in attachments if attachment.kind in IMAGE_KINDS and attachment.provider_file_id]
         for file_id in image_file_ids:
             latest_content.append(TransformerLlmContentPart(type="image_file", file_id=file_id))
+        document_file_ids = [
+            attachment.provider_file_id
+            for attachment in attachments
+            if attachment.kind in DOCUMENT_KINDS and attachment.provider_file_id
+        ]
+        for file_id in document_file_ids:
+            latest_content.append(TransformerLlmContentPart(type="document_file", file_id=file_id))
         messages.append(TransformerLlmMessage(role="user", content=latest_content))
 
-        document_file_ids = [attachment.provider_file_id for attachment in attachments if attachment.kind in DOCUMENT_KINDS and attachment.provider_file_id]
         should_generate_image = wants_image_generation(transformed_prompt)
         tools: list[TransformerLlmToolRequest] = []
-        if document_file_ids:
+        if document_file_ids and runtime_config.provider in {"openai", "azure_openai"}:
             tools.append(TransformerLlmToolRequest(type="code_interpreter", file_ids=document_file_ids))
-        if should_generate_image:
+        if should_generate_image and runtime_config.provider in {"openai", "azure_openai", "xai"}:
             tools.append(TransformerLlmToolRequest(type="image_generation", quality="high"))
 
         return TransformerLlmRequest(

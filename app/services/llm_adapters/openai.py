@@ -182,7 +182,7 @@ class OpenAIAdapter(BaseLlmAdapter):
             items.append(
                 {
                     "role": message.role,
-                    "content": self._build_responses_content(message),
+                    "content": self._build_responses_content(message, profile),
                 }
             )
         return items
@@ -258,14 +258,21 @@ class OpenAIAdapter(BaseLlmAdapter):
                 images.append({"media_type": "image/png", "base64_data": result})
         return images
 
-    def _build_responses_content(self, message: TransformerLlmMessage) -> list[dict[str, Any]]:
+    def _build_responses_content(
+        self,
+        message: TransformerLlmMessage,
+        profile: ResolvedLlmProviderProfile,
+    ) -> list[dict[str, Any]]:
         content: list[dict[str, Any]] = []
         for part in message.content:
             if part.type == "text" and part.text is not None:
                 content_type = "output_text" if message.role == "assistant" else "input_text"
                 content.append({"type": content_type, "text": part.text})
             elif part.type == "image_file" and part.file_id is not None:
-                content.append({"type": "input_image", "file_id": part.file_id})
+                file_block_type = "input_file" if profile.provider == "xai" else "input_image"
+                content.append({"type": file_block_type, "file_id": part.file_id})
+            elif part.type == "document_file" and part.file_id is not None:
+                content.append({"type": "input_file", "file_id": part.file_id})
         return content
 
     def _build_tools(self, request: TransformerLlmRequest) -> list[dict[str, Any]]:

@@ -35,12 +35,14 @@ Optional structure evaluator settings:
 3. Run `python -m app.db.seed`
 4. Start with `uvicorn app.main:app --reload`
 
+The local Alembic flow is for local app-managed databases. Shared Herman DB environments should be migrated by the canonical `herman-db` migration stream, with `prompt_transformer` validating the shared revision instead of applying app-local migrations.
+
 ## Railway startup behavior
 
 `python3 -m app.run_server` does this:
 
 1. read environment config
-2. run migrations if `RAILWAY_AUTO_MIGRATE=true`
+2. validate the canonical shared schema if Herman canonical mode is active, otherwise run migrations when `RAILWAY_AUTO_MIGRATE=true`
 3. run seed if `RAILWAY_SEED_ON_START=true`
 4. launch Uvicorn
 

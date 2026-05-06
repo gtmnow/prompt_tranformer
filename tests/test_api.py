@@ -1,5 +1,7 @@
 from unittest.mock import patch
 
+from sqlalchemy import text
+
 from app.db.seed import PROFILE_ROWS
 from app.models.profile import FinalProfile
 from app.models.prompt_score import ConversationPromptScore
@@ -17,12 +19,12 @@ AUTH_HEADERS = {
 }
 
 
-def _runtime_config(*, scoring_enabled: bool = True) -> RuntimeLlmConfig:
+def _runtime_config(*, scoring_enabled: bool = True, model: str = "gpt-4.1") -> RuntimeLlmConfig:
     return RuntimeLlmConfig(
         tenant_id="tenant_1",
         user_id_hash="user_1",
         provider="openai",
-        model="gpt-4.1",
+        model=model,
         endpoint_url="https://api.openai.com/v1",
         api_key="test-key",
         transformation_enabled=True,
@@ -50,6 +52,125 @@ def _update_profile(client, user_id: str, **overrides) -> None:
             raise AssertionError(f"Missing profile for {user_id}")
         for key, value in overrides.items():
             setattr(profile, key, value)
+        db.commit()
+    finally:
+        db.close()
+
+
+def _seed_canonical_membership_schema(client) -> None:
+    db = next(client.app.dependency_overrides[get_db]())
+    try:
+        db.execute(text("drop table if exists user_membership_profiles"))
+        db.execute(text("drop table if exists user_tenant_membership"))
+        db.execute(text("drop table if exists tenants"))
+        db.execute(
+            text(
+                """
+                create table tenants (
+                    id varchar(36) primary key,
+                    service_tier_definition_id varchar(36)
+                )
+                """
+            )
+        )
+        db.execute(
+            text(
+                """
+                create table user_tenant_membership (
+                    id varchar(36) primary key,
+                    user_id_hash varchar(255) not null,
+                    tenant_id varchar(36) not null,
+                    status varchar(32),
+                    is_primary boolean
+                )
+                """
+            )
+        )
+        db.execute(
+            text(
+                """
+                create table user_membership_profiles (
+                    id varchar(36) primary key,
+                    tenant_membership_id varchar(36) not null,
+                    title varchar(255),
+                    initial_user_type integer
+                )
+                """
+            )
+        )
+        db.execute(
+            text(
+                """
+                insert into tenants (id, service_tier_definition_id)
+                values ('tenant_1', 'tier_1')
+                """
+            )
+        )
+        db.execute(
+            text(
+                """
+                insert into user_tenant_membership (id, user_id_hash, tenant_id, status, is_primary)
+                values ('membership_1', 'user_1', 'tenant_1', 'active', true)
+                """
+            )
+        )
+        db.execute(
+            text(
+                """
+                insert into user_membership_profiles (id, tenant_membership_id, title, initial_user_type)
+                values ('profile_1', 'membership_1', 'Coach', 3)
+                """
+            )
+        )
+        db.execute(
+            text(
+                """
+                insert into rag_quota_policies (
+                    id,
+                    policy_key,
+                    scope_target,
+                    service_tier_definition_id,
+                    tenant_id,
+                    user_type,
+                    org_max_file_bytes,
+                    user_max_file_bytes,
+                    org_max_document_count,
+                    user_max_document_count,
+                    org_max_total_bytes,
+                    user_max_total_bytes,
+                    org_max_extracted_text_bytes,
+                    user_max_extracted_text_bytes,
+                    org_max_chunks_per_document,
+                    user_max_chunks_per_document,
+                    org_max_retrieved_chunks,
+                    user_max_retrieved_chunks,
+                    max_retrieved_chunks_total,
+                    is_active
+                ) values (
+                    'policy_service_tier_user_3',
+                    'service-tier-user-3',
+                    'service_tier',
+                    'tier_1',
+                    null,
+                    '3',
+                    1000,
+                    2000,
+                    10,
+                    20,
+                    10000,
+                    20000,
+                    5000,
+                    6000,
+                    7,
+                    8,
+                    4,
+                    5,
+                    9,
+                    true
+                )
+                """
+            )
+        )
         db.commit()
     finally:
         db.close()
@@ -102,17 +223,21 @@ def test_transform_uses_summary_override(client) -> None:
 
 
 def test_transform_falls_back_to_generic_default(client) -> None:
-    response = client.post(
-        "/api/transform_prompt",
-        headers=AUTH_HEADERS,
-        json={
-            "session_id": "sess_789",
-            "conversation_id": "conv_789",
-            "user_id_hash": "user_missing",
-            "raw_prompt": "What should I do next?",
-            "target_llm": {"provider": "openai", "model": "unknown-model"},
-        },
-    )
+    with patch(
+        "app.services.transformer_engine.RuntimeLlmResolver.resolve",
+        return_value=_runtime_config(model="unknown-model"),
+    ):
+        response = client.post(
+            "/api/transform_prompt",
+            headers=AUTH_HEADERS,
+            json={
+                "session_id": "sess_789",
+                "conversation_id": "conv_789",
+                "user_id_hash": "user_missing",
+                "raw_prompt": "What should I do next?",
+                "target_llm": {"provider": "openai", "model": "unknown-model"},
+            },
+        )
 
     assert response.status_code == 200
     body = response.json()
@@ -121,6 +246,22 @@ def test_transform_falls_back_to_generic_default(client) -> None:
     assert body["task_type"] == "unknown"
     assert body["metadata"]["persona_source"] == "generic_default"
     assert body["metadata"]["used_fallback_model"] is True
+
+
+def test_user_rag_limits_follow_canonical_membership_schema(client) -> None:
+    _seed_canonical_membership_schema(client)
+
+    response = client.get(
+        "/api/rag/limits/user/me",
+        headers=AUTH_HEADERS,
+        params={"tenant_id": "tenant_1", "user_id_hash": "user_1"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["limits"]["policy_key"] == "service-tier-user-3"
+    assert body["limits"]["max_document_count"] == 20
+    assert body["usage"]["document_count"] == 0
 
 
 def test_invalid_summary_type_returns_400(client) -> None:

@@ -85,6 +85,8 @@ cp .env.example .env
 alembic upgrade head
 ```
 
+Use the local Alembic flow only for local app-owned development databases. Shared Herman DB environments should be migrated by the canonical `herman-db` migration stream, and `prompt_transformer` should validate the shared revision instead of applying app-local migrations.
+
 4. Seed sample data:
 
 ```bash
@@ -314,7 +316,8 @@ Notes:
 - `DATABASE_URL` must be set on the app service, not only on the Postgres service.
 - `DATABASE_URL` should use `postgresql+psycopg://...`, not raw `postgresql://...`.
 - When `REQUIRE_SERVICE_AUTH=true`, callers must send both `Authorization: Bearer <PROMPT_TRANSFORMER_API_KEY>` and an allowed `X-Client-Id`.
-- `RAILWAY_AUTO_MIGRATE=true` runs `alembic upgrade head` during startup.
+- `RAILWAY_AUTO_MIGRATE=true` runs `alembic upgrade head` only when Herman canonical mode is not active.
+- Shared Herman DB deployments should use the canonical `herman-db` migration stream. In canonical mode, `prompt_transformer` validates the shared revision and does not apply its own Alembic chain.
 - `RAILWAY_SEED_ON_START=true` is useful for the first MVP deploy. After the sample profiles are loaded, switch it to `false`.
 - `railway.json` starts the service through `python3 -m app.run_server`, which bootstraps the database and then launches Uvicorn.
 

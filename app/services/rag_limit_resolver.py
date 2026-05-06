@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sqlalchemy import select, text
+from sqlalchemy import inspect, select, text
 from sqlalchemy.orm import Session
 
 from app.models.rag import RagCollection, RagDocument, RagQuotaPolicy
@@ -35,6 +35,7 @@ class RagUsage:
 class RagLimitResolver:
     def __init__(self, db_session: Session) -> None:
         self.db_session = db_session
+        self._column_cache: dict[tuple[str, str], bool] = {}
 
     def resolve_tenant_limits(self, tenant_id: str) -> ResolvedRagQuota:
         tenant_policy = self._find_policy(tenant_id=tenant_id, scope="tenant", user_type=None)
@@ -146,20 +147,48 @@ class RagLimitResolver:
         }.get(policy.scope_target, "Default")
 
     def _resolve_user_type(self, user_id_hash: str) -> str | None:
-        row = self.db_session.execute(
-            text(
-                """
-                select initial_user_type
-                from user_membership_profiles
-                where user_id_hash = :user_id_hash
-                order by id desc
-                limit 1
-                """
-            ),
-            {"user_id_hash": user_id_hash},
-        ).mappings().first()
+        if self._has_column("user_membership_profiles", "tenant_membership_id") and self._has_column(
+            "user_tenant_membership", "user_id_hash"
+        ):
+            row = self.db_session.execute(
+                text(
+                    """
+                    select ump.initial_user_type
+                    from user_tenant_membership utm
+                    join user_membership_profiles ump on ump.tenant_membership_id = utm.id
+                    where utm.user_id_hash = :user_id_hash
+                    order by coalesce(utm.is_primary, false) desc, ump.id desc
+                    limit 1
+                    """
+                ),
+                {"user_id_hash": user_id_hash},
+            ).mappings().first()
+        else:
+            row = self.db_session.execute(
+                text(
+                    """
+                    select initial_user_type
+                    from user_membership_profiles
+                    where user_id_hash = :user_id_hash
+                    order by id desc
+                    limit 1
+                    """
+                ),
+                {"user_id_hash": user_id_hash},
+            ).mappings().first()
         value = str((row or {}).get("initial_user_type") or "").strip()
         return value or None
+
+    def _has_column(self, table_name: str, column_name: str) -> bool:
+        cache_key = (table_name, column_name)
+        cached = self._column_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        inspector = inspect(self.db_session.get_bind())
+        has_column = column_name in {column["name"] for column in inspector.get_columns(table_name)}
+        self._column_cache[cache_key] = has_column
+        return has_column
 
     def _find_collection(self, *, tenant_id: str, scope: str, user_id_hash: str | None) -> RagCollection | None:
         query = select(RagCollection).where(

@@ -193,11 +193,16 @@ class PromptRequirementService:
         Optional[dict[str, object]],
     ]:
         existing = conversation.requirements if conversation is not None else {}
-        evaluator_payload, evaluator_usage_entry = self.structure_evaluator.evaluate(
+        evaluator_result = self.structure_evaluator.evaluate(
             raw_prompt=raw_prompt,
             enforcement_level=enforcement_level,
             runtime_config=runtime_config,
         )
+        if isinstance(evaluator_result, tuple):
+            evaluator_payload, evaluator_usage_entry = evaluator_result
+        else:
+            evaluator_payload = evaluator_result
+            evaluator_usage_entry = None
         merged_current: dict[str, ConversationRequirement] = {}
         merged_conversation: dict[str, ConversationRequirement] = {}
         heuristic_requirements: dict[str, ConversationRequirement] = {}

@@ -4,6 +4,7 @@ import logging
 import time
 
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.config import get_settings
 from app.core.logging import configure_application_logging
@@ -27,7 +28,7 @@ from app.services.prompt_scoring import PromptScoringService
 from app.services.rag_prompt_assembly_service import RagPromptAssemblyService
 from app.services.rag_retrieval_service import RagRetrievalService
 from app.services.request_logger import RequestLogger
-from app.services.runtime_llm import RuntimeLlmConfigError, RuntimeLlmResolver
+from app.services.runtime_llm import RuntimeLlmConfig, RuntimeLlmConfigError, RuntimeLlmResolver
 from app.services.task_inference import TaskInferenceService
 from app.services.token_usage import build_usage_entry, merge_usage, normalize_usage
 
@@ -74,7 +75,21 @@ class TransformerEngine:
         request_log_id: int | None = None
 
         try:
-            runtime_llm = self.runtime_llm.resolve(payload.user_id_hash)
+            try:
+                runtime_llm = self.runtime_llm.resolve(payload.user_id_hash)
+            except (RuntimeLlmConfigError, SQLAlchemyError):
+                runtime_llm = RuntimeLlmConfig(
+                    tenant_id="",
+                    user_id_hash=payload.user_id_hash,
+                    provider=payload.target_llm.provider,
+                    model=payload.target_llm.model,
+                    endpoint_url=None,
+                    api_key=self.settings.structure_evaluator_api_key,
+                    transformation_enabled=True,
+                    scoring_enabled=True,
+                    credential_status="fallback",
+                    source_kind="requested_target",
+                )
             step_started_at = time.perf_counter()
             persona = self.profile_resolver.resolve(payload.user_id_hash, payload.summary_type)
             timings_ms["profile_resolve"] = (time.perf_counter() - step_started_at) * 1000

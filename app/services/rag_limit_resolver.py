@@ -63,7 +63,7 @@ class RagLimitResolver:
             disabled_documents=sum(1 for item in documents if item.status == "disabled"),
         )
 
-    def _find_policy(self, *, tenant_id: str, scope: str, user_type: str | None) -> RagQuotaPolicy:
+    def _find_policy(self, *, tenant_id: str, scope: str, user_type: int | None) -> RagQuotaPolicy:
         tenant_row = self.db_session.execute(
             text("select service_tier_definition_id from tenants where id = :tenant_id limit 1"),
             {"tenant_id": tenant_id},
@@ -74,7 +74,7 @@ class RagLimitResolver:
             select(RagQuotaPolicy).where(RagQuotaPolicy.is_active.is_(True))
         ).all()
 
-        if scope == "user" and user_type:
+        if scope == "user" and user_type is not None:
             for candidate in candidates:
                 if (
                     candidate.scope_target == "tenant_override"
@@ -146,7 +146,7 @@ class RagLimitResolver:
             "tenant_override": "Organization Override",
         }.get(policy.scope_target, "Default")
 
-    def _resolve_user_type(self, user_id_hash: str) -> str | None:
+    def _resolve_user_type(self, user_id_hash: str) -> int | None:
         if self._has_column("user_membership_profiles", "tenant_membership_id") and self._has_column(
             "user_tenant_membership", "user_id_hash"
         ):
@@ -176,8 +176,13 @@ class RagLimitResolver:
                 ),
                 {"user_id_hash": user_id_hash},
             ).mappings().first()
-        value = str((row or {}).get("initial_user_type") or "").strip()
-        return value or None
+        value = (row or {}).get("initial_user_type")
+        if value in {None, ""}:
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
 
     def _has_column(self, table_name: str, column_name: str) -> bool:
         cache_key = (table_name, column_name)

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     CheckConstraint,
     DateTime,
+    Float,
     ForeignKey,
     Integer,
     JSON,
@@ -31,19 +32,19 @@ class RagQuotaPolicy(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    policy_key: Mapped[str] = mapped_column(String(120), nullable=False, unique=True)
+    policy_key: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
     scope_target: Mapped[str] = mapped_column(String(32), nullable=False)
     service_tier_definition_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     tenant_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
-    user_type: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
-    org_max_file_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
-    user_max_file_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    user_type: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    org_max_file_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    user_max_file_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     org_max_document_count: Mapped[int] = mapped_column(Integer, nullable=False)
     user_max_document_count: Mapped[int] = mapped_column(Integer, nullable=False)
-    org_max_total_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
-    user_max_total_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
-    org_max_extracted_text_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
-    user_max_extracted_text_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    org_max_total_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    user_max_total_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    org_max_extracted_text_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    user_max_extracted_text_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     org_max_chunks_per_document: Mapped[int] = mapped_column(Integer, nullable=False)
     user_max_chunks_per_document: Mapped[int] = mapped_column(Integer, nullable=False)
     org_max_retrieved_chunks: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -75,11 +76,10 @@ class RagCollection(Base):
     scope_type: Mapped[str] = mapped_column(String(20), nullable=False)
     tenant_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     user_id_hash: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
-    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     retrieval_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     max_results: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    settings_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -105,26 +105,17 @@ class RagDocument(Base):
     tenant_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     user_id_hash: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     filename: Mapped[str] = mapped_column(String(255), nullable=False)
-    media_type: Mapped[str] = mapped_column(String(120), nullable=False)
-    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    media_type: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
     status_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     sha256: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
-    source_kind: Mapped[str] = mapped_column(String(50), nullable=False, default="database_blob")
-    uploaded_by_admin_user_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    source_kind: Mapped[str] = mapped_column(String(30), nullable=False, default="database_blob")
+    uploaded_by_admin_user_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     uploaded_by_user_id_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    extracted_text: Mapped[str | None] = mapped_column(Text, nullable=True)
-    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-        onupdate=func.now(),
-    )
 
 
 class RagDocumentBlob(Base):
@@ -135,7 +126,6 @@ class RagDocumentBlob(Base):
         primary_key=True,
     )
     content_bytes: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
 class RagChunk(Base):
@@ -165,5 +155,5 @@ class RagRetrievalEvent(Base):
     document_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     chunk_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     rank: Mapped[int] = mapped_column(Integer, nullable=False)
-    score: Mapped[float] = mapped_column(JSON, nullable=False)
+    score: Mapped[float] = mapped_column(Float, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())

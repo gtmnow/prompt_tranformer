@@ -37,6 +37,12 @@ from app.services.token_usage import build_usage_entry
 router = APIRouter(prefix="/api", tags=["prompt-transformer"])
 
 
+def _raise_rag_http_error(exc: ValueError) -> None:
+    detail = str(exc).strip() or "Invalid RAG request"
+    status_code = status.HTTP_404_NOT_FOUND if "not found" in detail.lower() else status.HTTP_400_BAD_REQUEST
+    raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
 def _to_document_summary(document) -> RagDocumentSummary:
     return RagDocumentSummary(
         id=document.id,
@@ -285,11 +291,18 @@ def get_tenant_rag_limits(
     _: str = Depends(require_service_auth),
     db: Session = Depends(get_db),
 ) -> RagLimitsResponse:
-    resolver = RagLimitResolver(db)
-    return RagLimitsResponse(
-        limits=_to_limits_summary(resolver.resolve_tenant_limits(tenant_id)),
-        usage=_to_usage_summary(resolver.summarize_usage(tenant_id=tenant_id, scope="tenant")),
-    )
+    try:
+        resolver = RagLimitResolver(db)
+        return RagLimitsResponse(
+            limits=_to_limits_summary(resolver.resolve_tenant_limits(tenant_id)),
+            usage=_to_usage_summary(resolver.summarize_usage(tenant_id=tenant_id, scope="tenant")),
+        )
+    except ValueError as exc:
+        _raise_rag_http_error(exc)
+    except OperationalError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database unavailable") from exc
+    except SQLAlchemyTimeoutError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database connection pool exhausted") from exc
 
 
 @router.get("/rag/limits/user/me", response_model=RagLimitsResponse)
@@ -299,11 +312,18 @@ def get_user_rag_limits(
     _: str = Depends(require_service_auth),
     db: Session = Depends(get_db),
 ) -> RagLimitsResponse:
-    resolver = RagLimitResolver(db)
-    return RagLimitsResponse(
-        limits=_to_limits_summary(resolver.resolve_user_limits(tenant_id, user_id_hash)),
-        usage=_to_usage_summary(resolver.summarize_usage(tenant_id=tenant_id, scope="user", user_id_hash=user_id_hash)),
-    )
+    try:
+        resolver = RagLimitResolver(db)
+        return RagLimitsResponse(
+            limits=_to_limits_summary(resolver.resolve_user_limits(tenant_id, user_id_hash)),
+            usage=_to_usage_summary(resolver.summarize_usage(tenant_id=tenant_id, scope="user", user_id_hash=user_id_hash)),
+        )
+    except ValueError as exc:
+        _raise_rag_http_error(exc)
+    except OperationalError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database unavailable") from exc
+    except SQLAlchemyTimeoutError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database connection pool exhausted") from exc
 
 
 @router.get("/rag/tenant-documents/{tenant_id}", response_model=RagDocumentListResponse)
@@ -312,15 +332,22 @@ def list_tenant_documents(
     _: str = Depends(require_service_auth),
     db: Session = Depends(get_db),
 ) -> RagDocumentListResponse:
-    ingestion = RagIngestionService(db)
-    resolver = RagLimitResolver(db)
-    collection, documents = ingestion.list_documents(scope="tenant", tenant_id=tenant_id)
-    return RagDocumentListResponse(
-        collection=_to_collection_summary(collection),
-        limits=_to_limits_summary(resolver.resolve_tenant_limits(tenant_id)),
-        usage=_to_usage_summary(resolver.summarize_usage(tenant_id=tenant_id, scope="tenant")),
-        documents=[_to_document_summary(item) for item in documents],
-    )
+    try:
+        ingestion = RagIngestionService(db)
+        resolver = RagLimitResolver(db)
+        collection, documents = ingestion.list_documents(scope="tenant", tenant_id=tenant_id)
+        return RagDocumentListResponse(
+            collection=_to_collection_summary(collection),
+            limits=_to_limits_summary(resolver.resolve_tenant_limits(tenant_id)),
+            usage=_to_usage_summary(resolver.summarize_usage(tenant_id=tenant_id, scope="tenant")),
+            documents=[_to_document_summary(item) for item in documents],
+        )
+    except ValueError as exc:
+        _raise_rag_http_error(exc)
+    except OperationalError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database unavailable") from exc
+    except SQLAlchemyTimeoutError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database connection pool exhausted") from exc
 
 
 @router.get("/rag/user-documents/me", response_model=RagDocumentListResponse)
@@ -330,15 +357,22 @@ def list_user_documents(
     _: str = Depends(require_service_auth),
     db: Session = Depends(get_db),
 ) -> RagDocumentListResponse:
-    ingestion = RagIngestionService(db)
-    resolver = RagLimitResolver(db)
-    collection, documents = ingestion.list_documents(scope="user", tenant_id=tenant_id, user_id_hash=user_id_hash)
-    return RagDocumentListResponse(
-        collection=_to_collection_summary(collection),
-        limits=_to_limits_summary(resolver.resolve_user_limits(tenant_id, user_id_hash)),
-        usage=_to_usage_summary(resolver.summarize_usage(tenant_id=tenant_id, scope="user", user_id_hash=user_id_hash)),
-        documents=[_to_document_summary(item) for item in documents],
-    )
+    try:
+        ingestion = RagIngestionService(db)
+        resolver = RagLimitResolver(db)
+        collection, documents = ingestion.list_documents(scope="user", tenant_id=tenant_id, user_id_hash=user_id_hash)
+        return RagDocumentListResponse(
+            collection=_to_collection_summary(collection),
+            limits=_to_limits_summary(resolver.resolve_user_limits(tenant_id, user_id_hash)),
+            usage=_to_usage_summary(resolver.summarize_usage(tenant_id=tenant_id, scope="user", user_id_hash=user_id_hash)),
+            documents=[_to_document_summary(item) for item in documents],
+        )
+    except ValueError as exc:
+        _raise_rag_http_error(exc)
+    except OperationalError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database unavailable") from exc
+    except SQLAlchemyTimeoutError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database connection pool exhausted") from exc
 
 
 @router.post("/rag/tenant-documents", response_model=RagDocumentMutationResponse)
@@ -349,24 +383,31 @@ async def upload_tenant_document(
     _: str = Depends(require_service_auth),
     db: Session = Depends(get_db),
 ) -> RagDocumentMutationResponse:
-    ingestion = RagIngestionService(db)
-    resolver = RagLimitResolver(db)
-    document = ingestion.upload_document(
-        scope="tenant",
-        tenant_id=tenant_id,
-        user_id_hash=None,
-        filename=file.filename or "document",
-        media_type=file.content_type,
-        content_bytes=await file.read(),
-        uploaded_by_admin_user_id=uploaded_by_admin_user_id,
-    )
-    collection, _ = ingestion.list_documents(scope="tenant", tenant_id=tenant_id)
-    return RagDocumentMutationResponse(
-        collection=_to_collection_summary(collection),
-        limits=_to_limits_summary(resolver.resolve_tenant_limits(tenant_id)),
-        usage=_to_usage_summary(resolver.summarize_usage(tenant_id=tenant_id, scope="tenant")),
-        document=_to_document_summary(document),
-    )
+    try:
+        ingestion = RagIngestionService(db)
+        resolver = RagLimitResolver(db)
+        document = ingestion.upload_document(
+            scope="tenant",
+            tenant_id=tenant_id,
+            user_id_hash=None,
+            filename=file.filename or "document",
+            media_type=file.content_type,
+            content_bytes=await file.read(),
+            uploaded_by_admin_user_id=uploaded_by_admin_user_id,
+        )
+        collection, _ = ingestion.list_documents(scope="tenant", tenant_id=tenant_id)
+        return RagDocumentMutationResponse(
+            collection=_to_collection_summary(collection),
+            limits=_to_limits_summary(resolver.resolve_tenant_limits(tenant_id)),
+            usage=_to_usage_summary(resolver.summarize_usage(tenant_id=tenant_id, scope="tenant")),
+            document=_to_document_summary(document),
+        )
+    except ValueError as exc:
+        _raise_rag_http_error(exc)
+    except OperationalError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database unavailable") from exc
+    except SQLAlchemyTimeoutError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database connection pool exhausted") from exc
 
 
 @router.post("/rag/user-documents", response_model=RagDocumentMutationResponse)
@@ -377,24 +418,31 @@ async def upload_user_document(
     _: str = Depends(require_service_auth),
     db: Session = Depends(get_db),
 ) -> RagDocumentMutationResponse:
-    ingestion = RagIngestionService(db)
-    resolver = RagLimitResolver(db)
-    document = ingestion.upload_document(
-        scope="user",
-        tenant_id=tenant_id,
-        user_id_hash=user_id_hash,
-        filename=file.filename or "document",
-        media_type=file.content_type,
-        content_bytes=await file.read(),
-        uploaded_by_user_id_hash=user_id_hash,
-    )
-    collection, _ = ingestion.list_documents(scope="user", tenant_id=tenant_id, user_id_hash=user_id_hash)
-    return RagDocumentMutationResponse(
-        collection=_to_collection_summary(collection),
-        limits=_to_limits_summary(resolver.resolve_user_limits(tenant_id, user_id_hash)),
-        usage=_to_usage_summary(resolver.summarize_usage(tenant_id=tenant_id, scope="user", user_id_hash=user_id_hash)),
-        document=_to_document_summary(document),
-    )
+    try:
+        ingestion = RagIngestionService(db)
+        resolver = RagLimitResolver(db)
+        document = ingestion.upload_document(
+            scope="user",
+            tenant_id=tenant_id,
+            user_id_hash=user_id_hash,
+            filename=file.filename or "document",
+            media_type=file.content_type,
+            content_bytes=await file.read(),
+            uploaded_by_user_id_hash=user_id_hash,
+        )
+        collection, _ = ingestion.list_documents(scope="user", tenant_id=tenant_id, user_id_hash=user_id_hash)
+        return RagDocumentMutationResponse(
+            collection=_to_collection_summary(collection),
+            limits=_to_limits_summary(resolver.resolve_user_limits(tenant_id, user_id_hash)),
+            usage=_to_usage_summary(resolver.summarize_usage(tenant_id=tenant_id, scope="user", user_id_hash=user_id_hash)),
+            document=_to_document_summary(document),
+        )
+    except ValueError as exc:
+        _raise_rag_http_error(exc)
+    except OperationalError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database unavailable") from exc
+    except SQLAlchemyTimeoutError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database connection pool exhausted") from exc
 
 
 @router.delete("/rag/tenant-documents/{document_id}", response_model=RagDocumentDeleteResponse)
@@ -404,16 +452,23 @@ def delete_tenant_document(
     _: str = Depends(require_service_auth),
     db: Session = Depends(get_db),
 ) -> RagDocumentDeleteResponse:
-    ingestion = RagIngestionService(db)
-    resolver = RagLimitResolver(db)
-    collection, _ = ingestion.list_documents(scope="tenant", tenant_id=tenant_id)
-    ingestion.delete_document(document_id, tenant_id=tenant_id)
-    return RagDocumentDeleteResponse(
-        deleted_document_id=document_id,
-        collection=_to_collection_summary(collection),
-        limits=_to_limits_summary(resolver.resolve_tenant_limits(tenant_id)),
-        usage=_to_usage_summary(resolver.summarize_usage(tenant_id=tenant_id, scope="tenant")),
-    )
+    try:
+        ingestion = RagIngestionService(db)
+        resolver = RagLimitResolver(db)
+        collection, _ = ingestion.list_documents(scope="tenant", tenant_id=tenant_id)
+        ingestion.delete_document(document_id, tenant_id=tenant_id)
+        return RagDocumentDeleteResponse(
+            deleted_document_id=document_id,
+            collection=_to_collection_summary(collection),
+            limits=_to_limits_summary(resolver.resolve_tenant_limits(tenant_id)),
+            usage=_to_usage_summary(resolver.summarize_usage(tenant_id=tenant_id, scope="tenant")),
+        )
+    except ValueError as exc:
+        _raise_rag_http_error(exc)
+    except OperationalError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database unavailable") from exc
+    except SQLAlchemyTimeoutError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database connection pool exhausted") from exc
 
 
 @router.delete("/rag/user-documents/{document_id}", response_model=RagDocumentDeleteResponse)
@@ -424,16 +479,23 @@ def delete_user_document(
     _: str = Depends(require_service_auth),
     db: Session = Depends(get_db),
 ) -> RagDocumentDeleteResponse:
-    ingestion = RagIngestionService(db)
-    resolver = RagLimitResolver(db)
-    collection, _ = ingestion.list_documents(scope="user", tenant_id=tenant_id, user_id_hash=user_id_hash)
-    ingestion.delete_document(document_id, tenant_id=tenant_id, user_id_hash=user_id_hash)
-    return RagDocumentDeleteResponse(
-        deleted_document_id=document_id,
-        collection=_to_collection_summary(collection),
-        limits=_to_limits_summary(resolver.resolve_user_limits(tenant_id, user_id_hash)),
-        usage=_to_usage_summary(resolver.summarize_usage(tenant_id=tenant_id, scope="user", user_id_hash=user_id_hash)),
-    )
+    try:
+        ingestion = RagIngestionService(db)
+        resolver = RagLimitResolver(db)
+        collection, _ = ingestion.list_documents(scope="user", tenant_id=tenant_id, user_id_hash=user_id_hash)
+        ingestion.delete_document(document_id, tenant_id=tenant_id, user_id_hash=user_id_hash)
+        return RagDocumentDeleteResponse(
+            deleted_document_id=document_id,
+            collection=_to_collection_summary(collection),
+            limits=_to_limits_summary(resolver.resolve_user_limits(tenant_id, user_id_hash)),
+            usage=_to_usage_summary(resolver.summarize_usage(tenant_id=tenant_id, scope="user", user_id_hash=user_id_hash)),
+        )
+    except ValueError as exc:
+        _raise_rag_http_error(exc)
+    except OperationalError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database unavailable") from exc
+    except SQLAlchemyTimeoutError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database connection pool exhausted") from exc
 
 
 @router.post("/rag/documents/{document_id}/reprocess", response_model=RagDocumentMutationResponse)
@@ -442,30 +504,37 @@ def reprocess_document(
     _: str = Depends(require_service_auth),
     db: Session = Depends(get_db),
 ) -> RagDocumentMutationResponse:
-    ingestion = RagIngestionService(db)
-    resolver = RagLimitResolver(db)
-    document = ingestion.reprocess_document(document_id)
-    collection, _ = ingestion.list_documents(
-        scope=document.scope_type,
-        tenant_id=document.tenant_id,
-        user_id_hash=document.user_id_hash,
-    )
-    limits = (
-        resolver.resolve_tenant_limits(document.tenant_id)
-        if document.scope_type == "tenant"
-        else resolver.resolve_user_limits(document.tenant_id, document.user_id_hash or "")
-    )
-    usage = resolver.summarize_usage(
-        tenant_id=document.tenant_id,
-        scope=document.scope_type,
-        user_id_hash=document.user_id_hash,
-    )
-    return RagDocumentMutationResponse(
-        collection=_to_collection_summary(collection),
-        limits=_to_limits_summary(limits),
-        usage=_to_usage_summary(usage),
-        document=_to_document_summary(document),
-    )
+    try:
+        ingestion = RagIngestionService(db)
+        resolver = RagLimitResolver(db)
+        document = ingestion.reprocess_document(document_id)
+        collection, _ = ingestion.list_documents(
+            scope=document.scope_type,
+            tenant_id=document.tenant_id,
+            user_id_hash=document.user_id_hash,
+        )
+        limits = (
+            resolver.resolve_tenant_limits(document.tenant_id)
+            if document.scope_type == "tenant"
+            else resolver.resolve_user_limits(document.tenant_id, document.user_id_hash or "")
+        )
+        usage = resolver.summarize_usage(
+            tenant_id=document.tenant_id,
+            scope=document.scope_type,
+            user_id_hash=document.user_id_hash,
+        )
+        return RagDocumentMutationResponse(
+            collection=_to_collection_summary(collection),
+            limits=_to_limits_summary(limits),
+            usage=_to_usage_summary(usage),
+            document=_to_document_summary(document),
+        )
+    except ValueError as exc:
+        _raise_rag_http_error(exc)
+    except OperationalError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database unavailable") from exc
+    except SQLAlchemyTimeoutError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database connection pool exhausted") from exc
 
 
 @router.patch("/rag/collections/{collection_id}", response_model=RagDocumentListResponse)
@@ -475,32 +544,39 @@ def update_collection(
     _: str = Depends(require_service_auth),
     db: Session = Depends(get_db),
 ) -> RagDocumentListResponse:
-    ingestion = RagIngestionService(db)
-    resolver = RagLimitResolver(db)
-    collection = ingestion.update_collection(
-        collection_id=collection_id,
-        retrieval_enabled=payload.retrieval_enabled,
-        is_active=payload.is_active,
-        max_results=payload.max_results,
-    )
-    collection, documents = ingestion.list_documents(
-        scope=collection.scope_type,
-        tenant_id=collection.tenant_id,
-        user_id_hash=collection.user_id_hash,
-    )
-    limits = (
-        resolver.resolve_tenant_limits(collection.tenant_id)
-        if collection.scope_type == "tenant"
-        else resolver.resolve_user_limits(collection.tenant_id, collection.user_id_hash or "")
-    )
-    usage = resolver.summarize_usage(
-        tenant_id=collection.tenant_id,
-        scope=collection.scope_type,
-        user_id_hash=collection.user_id_hash,
-    )
-    return RagDocumentListResponse(
-        collection=_to_collection_summary(collection),
-        limits=_to_limits_summary(limits),
-        usage=_to_usage_summary(usage),
-        documents=[_to_document_summary(item) for item in documents],
-    )
+    try:
+        ingestion = RagIngestionService(db)
+        resolver = RagLimitResolver(db)
+        collection = ingestion.update_collection(
+            collection_id=collection_id,
+            retrieval_enabled=payload.retrieval_enabled,
+            is_active=payload.is_active,
+            max_results=payload.max_results,
+        )
+        collection, documents = ingestion.list_documents(
+            scope=collection.scope_type,
+            tenant_id=collection.tenant_id,
+            user_id_hash=collection.user_id_hash,
+        )
+        limits = (
+            resolver.resolve_tenant_limits(collection.tenant_id)
+            if collection.scope_type == "tenant"
+            else resolver.resolve_user_limits(collection.tenant_id, collection.user_id_hash or "")
+        )
+        usage = resolver.summarize_usage(
+            tenant_id=collection.tenant_id,
+            scope=collection.scope_type,
+            user_id_hash=collection.user_id_hash,
+        )
+        return RagDocumentListResponse(
+            collection=_to_collection_summary(collection),
+            limits=_to_limits_summary(limits),
+            usage=_to_usage_summary(usage),
+            documents=[_to_document_summary(item) for item in documents],
+        )
+    except ValueError as exc:
+        _raise_rag_http_error(exc)
+    except OperationalError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database unavailable") from exc
+    except SQLAlchemyTimeoutError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database connection pool exhausted") from exc

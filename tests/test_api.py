@@ -1,6 +1,7 @@
 from unittest.mock import patch
 
 from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
 
 from app.db.seed import PROFILE_ROWS
 from app.models.profile import FinalProfile
@@ -208,7 +209,7 @@ def _seed_canonical_membership_schema(client) -> None:
                     'service_tier',
                     'tier_1',
                     null,
-                    '3',
+                    3,
                     1000,
                     2000,
                     10,
@@ -223,6 +224,142 @@ def _seed_canonical_membership_schema(client) -> None:
                     5,
                     9,
                     true
+                )
+                """
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+
+def _recreate_canonical_rag_schema(client) -> None:
+    db = next(client.app.dependency_overrides[get_db]())
+    try:
+        for table_name in (
+            "rag_retrieval_events",
+            "rag_chunks",
+            "rag_document_blobs",
+            "rag_documents",
+            "rag_collections",
+            "rag_quota_policies",
+        ):
+            db.execute(text(f"drop table if exists {table_name}"))
+
+        db.execute(
+            text(
+                """
+                create table rag_quota_policies (
+                    id varchar(36) primary key,
+                    policy_key varchar(100) not null unique,
+                    scope_target varchar(30) not null,
+                    service_tier_definition_id varchar(36),
+                    tenant_id varchar(36),
+                    user_type integer,
+                    org_max_file_bytes bigint not null,
+                    user_max_file_bytes bigint not null,
+                    org_max_document_count integer not null,
+                    user_max_document_count integer not null,
+                    org_max_total_bytes bigint not null,
+                    user_max_total_bytes bigint not null,
+                    org_max_extracted_text_bytes bigint not null,
+                    user_max_extracted_text_bytes bigint not null,
+                    org_max_chunks_per_document integer not null,
+                    user_max_chunks_per_document integer not null,
+                    org_max_retrieved_chunks integer not null,
+                    user_max_retrieved_chunks integer not null,
+                    max_retrieved_chunks_total integer not null,
+                    is_active boolean not null default true,
+                    created_at datetime not null default current_timestamp,
+                    updated_at datetime not null default current_timestamp
+                )
+                """
+            )
+        )
+        db.execute(
+            text(
+                """
+                create table rag_collections (
+                    id varchar(36) primary key,
+                    scope_type varchar(20) not null,
+                    tenant_id varchar(36),
+                    user_id_hash varchar(255),
+                    name varchar(200) not null,
+                    is_active boolean not null default true,
+                    retrieval_enabled boolean not null default true,
+                    max_results integer,
+                    created_at datetime not null default current_timestamp,
+                    updated_at datetime not null default current_timestamp
+                )
+                """
+            )
+        )
+        db.execute(
+            text(
+                """
+                create table rag_documents (
+                    id varchar(36) primary key,
+                    collection_id varchar(36) not null,
+                    scope_type varchar(20) not null,
+                    tenant_id varchar(36),
+                    user_id_hash varchar(255),
+                    filename varchar(255) not null,
+                    media_type varchar(120),
+                    size_bytes bigint not null,
+                    status varchar(30) not null default 'pending',
+                    status_message text,
+                    sha256 varchar(64) not null,
+                    source_kind varchar(30) not null default 'database_blob',
+                    uploaded_by_admin_user_id varchar(36),
+                    uploaded_by_user_id_hash varchar(255),
+                    uploaded_at datetime not null default current_timestamp,
+                    processed_at datetime,
+                    disabled_at datetime
+                )
+                """
+            )
+        )
+        db.execute(
+            text(
+                """
+                create table rag_document_blobs (
+                    document_id varchar(36) primary key,
+                    content_bytes blob not null
+                )
+                """
+            )
+        )
+        db.execute(
+            text(
+                """
+                create table rag_chunks (
+                    id varchar(36) primary key,
+                    document_id varchar(36) not null,
+                    chunk_index integer not null,
+                    chunk_text text not null,
+                    token_count integer not null,
+                    embedding_vector json not null,
+                    embedding_model varchar(100) not null,
+                    created_at datetime not null default current_timestamp,
+                    unique(document_id, chunk_index)
+                )
+                """
+            )
+        )
+        db.execute(
+            text(
+                """
+                create table rag_retrieval_events (
+                    id varchar(36) primary key,
+                    conversation_id varchar(255) not null,
+                    user_id_hash varchar(255) not null,
+                    tenant_id varchar(36),
+                    scope_type varchar(20) not null,
+                    document_id varchar(36) not null,
+                    chunk_id varchar(36) not null,
+                    rank integer not null,
+                    score real not null,
+                    created_at datetime not null default current_timestamp
                 )
                 """
             )
@@ -407,7 +544,6 @@ def test_user_scope_retrieval_falls_back_to_recent_chunks_when_query_has_no_over
             source_kind="database_blob",
             uploaded_by_admin_user_id=None,
             uploaded_by_user_id_hash="user_1",
-            extracted_text="I prefer concise recruiter summaries and bullet-style responses.",
         )
         chunk = RagChunk(
             id="chunk_user_1",
@@ -442,6 +578,87 @@ def test_user_scope_retrieval_falls_back_to_recent_chunks_when_query_has_no_over
         db.close()
 
 
+def test_upload_user_document_works_against_canonical_herman_db_rag_schema(client) -> None:
+    _recreate_canonical_rag_schema(client)
+    _seed_canonical_membership_schema(client)
+
+    response = client.post(
+        "/api/rag/user-documents",
+        headers=AUTH_HEADERS,
+        data={"tenant_id": "tenant_1", "user_id_hash": "user_1"},
+        files={"file": ("personal-notes.txt", b"I prefer concise recruiter summaries.", "text/plain")},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["document"]["status"] == "ready"
+    assert body["usage"]["document_count"] == 1
+
+
+def test_retrieval_events_write_against_canonical_herman_db_rag_schema(client) -> None:
+    from app.models.rag import RagChunk, RagCollection, RagDocument
+    from app.services.rag_retrieval_service import RagRetrievalService
+
+    _recreate_canonical_rag_schema(client)
+    _seed_canonical_membership_schema(client)
+
+    db = next(client.app.dependency_overrides[get_db]())
+    try:
+        collection = RagCollection(
+            id="collection_user_canonical",
+            scope_type="user",
+            tenant_id="tenant_1",
+            user_id_hash="user_1",
+            name="Personal Context",
+            is_active=True,
+            retrieval_enabled=True,
+            max_results=2,
+        )
+        document = RagDocument(
+            id="document_user_canonical",
+            collection_id=collection.id,
+            scope_type="user",
+            tenant_id="tenant_1",
+            user_id_hash="user_1",
+            filename="personal-notes.txt",
+            media_type="text/plain",
+            size_bytes=64,
+            status="ready",
+            status_message=None,
+            sha256="abc123",
+            source_kind="database_blob",
+            uploaded_by_admin_user_id=None,
+            uploaded_by_user_id_hash="user_1",
+        )
+        chunk = RagChunk(
+            id="chunk_user_canonical",
+            document_id=document.id,
+            chunk_index=0,
+            chunk_text="I prefer concise recruiter summaries and bullet-style responses.",
+            token_count=9,
+            embedding_vector=[0.0] * 32,
+        )
+        db.add(collection)
+        db.add(document)
+        db.add(chunk)
+        db.commit()
+
+        result = RagRetrievalService(db).retrieve(
+            tenant_id="tenant_1",
+            user_id_hash="user_1",
+            conversation_id="conv_canonical_retrieval",
+            raw_prompt="Tell me about recruiter summaries.",
+            conversation_history=[],
+        )
+        db.commit()
+
+        stored_score = db.execute(text("select score from rag_retrieval_events limit 1")).scalar_one()
+        assert result.user_chunk_count == 1
+        assert isinstance(stored_score, (int, float))
+    finally:
+        db.close()
+
+
 def test_user_rag_limits_follow_canonical_membership_schema(client) -> None:
     _seed_canonical_membership_schema(client)
 
@@ -456,6 +673,48 @@ def test_user_rag_limits_follow_canonical_membership_schema(client) -> None:
     assert body["limits"]["policy_key"] == "service-tier-user-3"
     assert body["limits"]["max_document_count"] == 20
     assert body["usage"]["document_count"] == 0
+
+
+def test_list_user_documents_returns_controlled_client_error_when_rag_policies_are_missing(client) -> None:
+    response = client.get(
+        "/api/rag/user-documents/me",
+        headers=AUTH_HEADERS,
+        params={"tenant_id": "tenant_1", "user_id_hash": "user_1"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]
+
+
+def test_list_user_documents_returns_503_for_database_errors(client) -> None:
+    with patch(
+        "app.api.routes.RagLimitResolver.resolve_user_limits",
+        side_effect=OperationalError("select 1", {}, Exception("db down")),
+    ):
+        response = client.get(
+            "/api/rag/user-documents/me",
+            headers=AUTH_HEADERS,
+            params={"tenant_id": "tenant_1", "user_id_hash": "user_1"},
+        )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Database unavailable"
+
+
+def test_upload_user_document_returns_400_for_domain_validation_errors(client) -> None:
+    with patch(
+        "app.api.routes.RagIngestionService.upload_document",
+        side_effect=ValueError("Unsupported document type"),
+    ):
+        response = client.post(
+            "/api/rag/user-documents",
+            headers=AUTH_HEADERS,
+            data={"tenant_id": "tenant_1", "user_id_hash": "user_1"},
+            files={"file": ("notes.exe", b"not-a-doc", "application/octet-stream")},
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Unsupported document type"
 
 
 def test_invalid_summary_type_returns_400(client) -> None:
@@ -971,6 +1230,9 @@ def test_final_response_usage_endpoint_updates_request_token_usage(client) -> No
                 "input_tokens": 820,
                 "output_tokens": 260,
                 "total_tokens": 1080,
+                "reasoning_tokens": None,
+                "cache_read_tokens": None,
+                "cache_write_tokens": None,
                 "raw_usage": {
                     "prompt_tokens": 820,
                     "completion_tokens": 260,

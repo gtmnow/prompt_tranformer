@@ -87,8 +87,6 @@ class RagIngestionService:
             uploaded_by_admin_user_id=uploaded_by_admin_user_id,
             uploaded_by_user_id_hash=uploaded_by_user_id_hash,
             uploaded_at=now,
-            created_at=now,
-            updated_at=now,
         )
         self.db_session.add(document)
         self.db_session.add(RagDocumentBlob(document_id=document.id, content_bytes=content_bytes))
@@ -212,11 +210,6 @@ class RagIngestionService:
         chunks = self._chunk_text(normalized)
         if len(chunks) > limits.max_chunks_per_document:
             raise ValueError("Document exceeds the maximum chunk count")
-        document.extracted_text = normalized
-        document.metadata_json = {
-            "extracted_text_bytes": extracted_bytes,
-            "chunk_count": len(chunks),
-        }
         for index, chunk in enumerate(chunks):
             self.db_session.add(
                 RagChunk(

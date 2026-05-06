@@ -645,6 +645,132 @@ def test_user_scope_retrieval_skips_unrelated_chunks_when_query_has_no_overlap(c
         db.close()
 
 
+def test_user_scope_retrieval_falls_back_for_personal_context_queries(client) -> None:
+    from app.models.rag import RagChunk, RagCollection, RagDocument
+    from app.services.rag_retrieval_service import RagRetrievalService
+
+    _seed_canonical_membership_schema(client)
+
+    db = next(client.app.dependency_overrides[get_db]())
+    try:
+        collection = RagCollection(
+            id="collection_user_resume_fallback",
+            scope_type="user",
+            tenant_id="tenant_1",
+            user_id_hash="user_1",
+            name="Personal Context",
+            is_active=True,
+            retrieval_enabled=True,
+            max_results=2,
+        )
+        document = RagDocument(
+            id="document_user_resume_fallback",
+            collection_id=collection.id,
+            scope_type="user",
+            tenant_id="tenant_1",
+            user_id_hash="user_1",
+            filename="resume.txt",
+            media_type="text/plain",
+            size_bytes=256,
+            status="ready",
+            status_message=None,
+            sha256="fallbackhash",
+            source_kind="database_blob",
+            uploaded_by_admin_user_id=None,
+            uploaded_by_user_id_hash="user_1",
+        )
+        chunk = RagChunk(
+            id="chunk_user_resume_fallback",
+            document_id=document.id,
+            chunk_index=0,
+            chunk_text="I have led a marketing ops team that shipped two B2B launch campaigns.",
+            token_count=14,
+            embedding_vector=vectorize_text("I have led a marketing ops team that shipped two B2B launch campaigns."),
+        )
+        db.add(collection)
+        db.add(document)
+        db.add(chunk)
+        db.commit()
+
+        result = RagRetrievalService(db).retrieve(
+            tenant_id="tenant_1",
+            user_id_hash="user_1",
+            conversation_id="conv_personal_fallback",
+            raw_prompt="Can you review my resume and tell me what to improve?",
+            conversation_history=[],
+        )
+
+        assert result.user_chunk_count == 1
+        assert result.document_count == 1
+        assert result.assembled_references
+        assert result.assembled_references[0]["filename"] == "resume.txt"
+    finally:
+        db.close()
+
+
+def test_user_scope_retrieval_marks_personal_context_disabled_when_set_false(client) -> None:
+    from app.models.rag import RagChunk, RagCollection, RagDocument
+    from app.services.rag_retrieval_service import RagRetrievalService
+
+    _seed_canonical_membership_schema(client)
+
+    db = next(client.app.dependency_overrides[get_db]())
+    try:
+        collection = RagCollection(
+            id="collection_user_resume_disabled",
+            scope_type="user",
+            tenant_id="tenant_1",
+            user_id_hash="user_1",
+            name="Personal Context",
+            is_active=True,
+            retrieval_enabled=False,
+            max_results=2,
+        )
+        document = RagDocument(
+            id="document_user_resume_disabled",
+            collection_id=collection.id,
+            scope_type="user",
+            tenant_id="tenant_1",
+            user_id_hash="user_1",
+            filename="resume.txt",
+            media_type="text/plain",
+            size_bytes=256,
+            status="ready",
+            status_message=None,
+            sha256="disabledhash",
+            source_kind="database_blob",
+            uploaded_by_admin_user_id=None,
+            uploaded_by_user_id_hash="user_1",
+        )
+        chunk = RagChunk(
+            id="chunk_user_resume_disabled",
+            document_id=document.id,
+            chunk_index=0,
+            chunk_text="I led GTM launches with measurable growth.",
+            token_count=9,
+            embedding_vector=vectorize_text("I led GTM launches with measurable growth."),
+        )
+        db.add(collection)
+        db.add(document)
+        db.add(chunk)
+        db.commit()
+
+        result = RagRetrievalService(db).retrieve(
+            tenant_id="tenant_1",
+            user_id_hash="user_1",
+            conversation_id="conv_personal_disabled",
+            raw_prompt="Can you review my resume and tell me what to improve?",
+            conversation_history=[],
+        )
+
+        assert result.user_chunk_count == 0
+        assert result.document_count == 0
+        assert result.assembled_references == []
+        assert result.skipped_reason == "user_context_disabled"
+    finally:
+        db.close()
+
+
 def test_upload_user_document_works_against_canonical_herman_db_rag_schema(client) -> None:
     _recreate_canonical_rag_schema(client)
     _seed_canonical_membership_schema(client)
@@ -826,6 +952,102 @@ def test_execute_chat_continues_when_retrieval_event_logging_fails(client) -> No
     assert body["metadata"]["retrieval_used"] is True
     assert body["metadata"]["retrieval_scope_counts"]["user"] == 1
     assert body["metadata"]["retrieval_document_count"] == 1
+
+
+def test_execute_chat_reports_user_context_disabled_reason_when_personal_toggle_is_off(client) -> None:
+    from app.models.rag import RagChunk, RagCollection, RagDocument
+
+    _seed_final_profiles(client)
+    _recreate_canonical_rag_schema(client)
+    _seed_canonical_membership_schema(client)
+
+    db = next(client.app.dependency_overrides[get_db]())
+    try:
+        collection = RagCollection(
+            id="collection_user_resume_disabled_chat",
+            scope_type="user",
+            tenant_id="tenant_1",
+            user_id_hash="user_1",
+            name="Personal Context",
+            is_active=True,
+            retrieval_enabled=False,
+            max_results=2,
+        )
+        document = RagDocument(
+            id="document_user_resume_disabled_chat",
+            collection_id=collection.id,
+            scope_type="user",
+            tenant_id="tenant_1",
+            user_id_hash="user_1",
+            filename="resume.txt",
+            media_type="text/plain",
+            size_bytes=256,
+            status="ready",
+            status_message=None,
+            sha256="disabledhash",
+            source_kind="database_blob",
+            uploaded_by_admin_user_id=None,
+            uploaded_by_user_id_hash="user_1",
+        )
+        chunk = RagChunk(
+            id="chunk_user_resume_disabled_chat",
+            document_id=document.id,
+            chunk_index=0,
+            chunk_text="I led GTM launches with measurable growth.",
+            token_count=9,
+            embedding_vector=vectorize_text("I led GTM launches with measurable growth."),
+        )
+        db.add(collection)
+        db.add(document)
+        db.add(chunk)
+        db.commit()
+    finally:
+        db.close()
+
+    with (
+        patch(
+            "app.services.transformer_engine.RuntimeLlmResolver.resolve",
+            return_value=_runtime_config(
+                provider="xai",
+                model="grok-3-mini",
+                endpoint_url="https://api.x.ai/v1",
+            ),
+        ),
+        patch("app.services.final_response_service.httpx.Client") as httpx_client,
+    ):
+        mock_client = httpx_client.return_value.__enter__.return_value
+        mock_client.post.return_value.status_code = 200
+        mock_client.post.return_value.json.return_value = {
+            "choices": [
+                {
+                    "message": {
+                        "content": "Here is a general answer.",
+                    }
+                }
+            ]
+        }
+
+        response = client.post(
+            "/api/chat/execute",
+            headers=AUTH_HEADERS,
+            json={
+                "session_id": "sess_resume_disabled",
+                "conversation_id": "conv_resume_disabled",
+                "user_id_hash": "user_1",
+                "raw_prompt": "Can you review my resume and tell me what to improve?",
+                "target_llm": {"provider": "xai", "model": "grok-3-mini"},
+                "conversation_history": [],
+                "attachments": [],
+                "transform_enabled": True,
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["assistant_text"] == "Here is a general answer."
+    assert body["metadata"]["retrieval_used"] is False
+    assert body["metadata"]["retrieval_scope_counts"] == {"tenant": 0, "user": 0}
+    assert body["metadata"]["retrieval_skipped_reason"] == "user_context_disabled"
 
 
 def test_execute_chat_skips_retrieval_for_short_queries_and_reports_reason(client) -> None:

@@ -507,6 +507,8 @@ class TransformerEngine:
             "user": retrieval.user_chunk_count,
         }
         metadata.retrieval_document_count = retrieval.document_count
+        if retrieval.skipped_reason and not metadata.retrieval_skipped_reason:
+            metadata.retrieval_skipped_reason = retrieval.skipped_reason
         if not retrieval.assembled_references:
             return None
         reference_context = self.rag_prompt_assembly.assemble(

@@ -23,6 +23,7 @@ class RagRetrievalResult:
     tenant_chunk_count: int
     user_chunk_count: int
     document_count: int
+    skipped_reason: str | None = None
 
 
 class RagRetrievalService:
@@ -58,6 +59,11 @@ class RagRetrievalService:
             query_terms=query_terms,
             top_k=tenant_limits.max_retrieved_chunks,
         )
+        user_collection = self._get_collection(
+            scope="user",
+            tenant_id=tenant_id,
+            user_id_hash=user_id_hash,
+        )
         user_results = self._retrieve_scope(
             scope="user",
             tenant_id=tenant_id,
@@ -66,11 +72,36 @@ class RagRetrievalService:
             query_terms=query_terms,
             top_k=user_limits.max_retrieved_chunks,
         )
+        if (
+            not user_results
+            and self._is_personal_context_query(query_text)
+            and user_limits.max_retrieved_chunks > 0
+        ):
+            user_results = self._retrieve_scope(
+                scope="user",
+                tenant_id=tenant_id,
+                user_id_hash=user_id_hash,
+                query_vector=query_vector,
+                query_terms=query_terms,
+                top_k=user_limits.max_retrieved_chunks,
+                require_keyword_overlap=False,
+                min_score=0.0,
+            )
 
         combined = sorted(tenant_results + user_results, key=lambda item: item["score"], reverse=True)
         combined = combined[: min(tenant_limits.max_retrieved_chunks_total, user_limits.max_retrieved_chunks_total)]
         if not combined:
-            return RagRetrievalResult([], 0, 0, 0)
+            return RagRetrievalResult(
+                assembled_references=[],
+                tenant_chunk_count=0,
+                user_chunk_count=0,
+                document_count=0,
+                skipped_reason=(
+                    "user_context_disabled"
+                    if user_collection is not None and not user_collection.retrieval_enabled
+                    else None
+                ),
+            )
 
         tenant_count = sum(1 for item in combined if item["scope_type"] == "tenant")
         user_count = sum(1 for item in combined if item["scope_type"] == "user")
@@ -99,6 +130,22 @@ class RagRetrievalService:
             user_chunk_count=user_count,
             document_count=len(document_ids),
         )
+
+    def _get_collection(
+        self,
+        *,
+        scope: str,
+        tenant_id: str,
+        user_id_hash: str | None,
+    ) -> RagCollection | None:
+        return self.db_session.scalars(
+            select(RagCollection).where(
+                RagCollection.scope_type == scope,
+                RagCollection.tenant_id == tenant_id,
+                RagCollection.user_id_hash == (user_id_hash if scope == "user" else None),
+                RagCollection.is_active.is_(True),
+            ).limit(1)
+        ).first()
 
     def _persist_retrieval_events(
         self,
@@ -135,6 +182,8 @@ class RagRetrievalService:
         query_vector: list[float],
         query_terms: set[str],
         top_k: int,
+        require_keyword_overlap: bool = True,
+        min_score: float | None = None,
     ) -> list[dict[str, str | float]]:
         if top_k <= 0:
             return []
@@ -168,10 +217,11 @@ class RagRetrievalService:
                 "chunk_text": chunk.chunk_text,
                 "score": 0.0,
             }
-            if self._keyword_overlap(query_terms, searchable_text) <= 0:
+            if require_keyword_overlap and self._keyword_overlap(query_terms, searchable_text) <= 0:
                 continue
             score = self._cosine(query_vector, chunk.embedding_vector or [])
-            if score >= self.settings.reference_retrieval_min_score:
+            threshold = self.settings.reference_retrieval_min_score if min_score is None else min_score
+            if score >= threshold:
                 item["score"] = score
                 scored.append(item)
         limit = collection.max_results if collection.max_results is not None else top_k
@@ -188,6 +238,18 @@ class RagRetrievalService:
             }
             for item in ranked
         ]
+
+    @staticmethod
+    def _is_personal_context_query(text: str) -> bool:
+        normalized = text.lower()
+        if not normalized:
+            return False
+        return bool(
+            re.search(
+                r"\b(my|your)\s+(resume|curriculum vita[eé]|cv|background|experience|work history|profile)\b",
+                normalized,
+            )
+        )
 
     def _vectorize(self, text: str) -> list[float]:
         return vectorize_text(text)

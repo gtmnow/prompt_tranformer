@@ -125,23 +125,56 @@ class RagRetrievalService:
                 RagDocument.status == "ready",
             )
         ).all()
-        scored = []
+        scored: list[dict[str, str | float | int]] = []
+        fallback_candidates: list[dict[str, str | float | int]] = []
         for chunk, document in rows:
+            item = {
+                "scope_type": document.scope_type,
+                "document_id": document.id,
+                "chunk_id": chunk.id,
+                "filename": document.filename,
+                "chunk_text": chunk.chunk_text,
+                "score": 0.0,
+                "sort_epoch": document.uploaded_at.timestamp() if document.uploaded_at else 0.0,
+                "chunk_index": chunk.chunk_index,
+            }
             score = self._cosine(query_vector, chunk.embedding_vector or [])
-            if score <= 0:
+            if score > 0:
+                item["score"] = score
+                scored.append(item)
                 continue
-            scored.append(
-                {
-                    "scope_type": document.scope_type,
-                    "document_id": document.id,
-                    "chunk_id": chunk.id,
-                    "filename": document.filename,
-                    "chunk_text": chunk.chunk_text,
-                    "score": score,
-                }
-            )
+            if scope == "user":
+                fallback_candidates.append(item)
         limit = collection.max_results if collection.max_results is not None else top_k
-        return sorted(scored, key=lambda item: item["score"], reverse=True)[: min(top_k, limit)]
+        effective_limit = min(top_k, limit)
+        ranked = sorted(scored, key=lambda item: float(item["score"]), reverse=True)[:effective_limit]
+
+        if scope == "user" and len(ranked) < effective_limit and fallback_candidates:
+            seen_chunk_ids = {str(item["chunk_id"]) for item in ranked}
+            fallback_ranked = sorted(
+                fallback_candidates,
+                key=lambda item: (float(item["sort_epoch"]), -int(item["chunk_index"])),
+                reverse=True,
+            )
+            for item in fallback_ranked:
+                if str(item["chunk_id"]) in seen_chunk_ids:
+                    continue
+                ranked.append(item)
+                seen_chunk_ids.add(str(item["chunk_id"]))
+                if len(ranked) >= effective_limit:
+                    break
+
+        return [
+            {
+                "scope_type": str(item["scope_type"]),
+                "document_id": str(item["document_id"]),
+                "chunk_id": str(item["chunk_id"]),
+                "filename": str(item["filename"]),
+                "chunk_text": str(item["chunk_text"]),
+                "score": float(item["score"]),
+            }
+            for item in ranked
+        ]
 
     def _vectorize(self, text: str) -> list[float]:
         vector = [0.0] * VECTOR_SIZE

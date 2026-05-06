@@ -154,6 +154,55 @@ def _seed_canonical_membership_schema(client) -> None:
                     max_retrieved_chunks_total,
                     is_active
                 ) values (
+                    'policy_service_tier_default',
+                    'service-tier-default',
+                    'service_tier',
+                    'tier_1',
+                    null,
+                    null,
+                    1000,
+                    2000,
+                    10,
+                    20,
+                    10000,
+                    20000,
+                    5000,
+                    6000,
+                    7,
+                    8,
+                    4,
+                    5,
+                    9,
+                    true
+                )
+                """
+            )
+        )
+        db.execute(
+            text(
+                """
+                insert into rag_quota_policies (
+                    id,
+                    policy_key,
+                    scope_target,
+                    service_tier_definition_id,
+                    tenant_id,
+                    user_type,
+                    org_max_file_bytes,
+                    user_max_file_bytes,
+                    org_max_document_count,
+                    user_max_document_count,
+                    org_max_total_bytes,
+                    user_max_total_bytes,
+                    org_max_extracted_text_bytes,
+                    user_max_extracted_text_bytes,
+                    org_max_chunks_per_document,
+                    user_max_chunks_per_document,
+                    org_max_retrieved_chunks,
+                    user_max_retrieved_chunks,
+                    max_retrieved_chunks_total,
+                    is_active
+                ) values (
                     'policy_service_tier_user_3',
                     'service-tier-user-3',
                     'service_tier',
@@ -323,6 +372,74 @@ def test_execute_chat_keeps_runtime_xai_model_and_reports_retrieval_metadata(cli
 
     request_json = mock_client.post.call_args.kwargs["json"]
     assert request_json["model"] == "grok-3-mini"
+
+
+def test_user_scope_retrieval_falls_back_to_recent_chunks_when_query_has_no_overlap(client) -> None:
+    from app.models.rag import RagChunk, RagCollection, RagDocument
+    from app.services.rag_retrieval_service import RagRetrievalService
+
+    _seed_canonical_membership_schema(client)
+
+    db = next(client.app.dependency_overrides[get_db]())
+    try:
+        collection = RagCollection(
+            id="collection_user_1",
+            scope_type="user",
+            tenant_id="tenant_1",
+            user_id_hash="user_1",
+            name="Personal Context",
+            is_active=True,
+            retrieval_enabled=True,
+            max_results=2,
+        )
+        document = RagDocument(
+            id="document_user_1",
+            collection_id=collection.id,
+            scope_type="user",
+            tenant_id="tenant_1",
+            user_id_hash="user_1",
+            filename="personal-notes.txt",
+            media_type="text/plain",
+            size_bytes=128,
+            status="ready",
+            status_message=None,
+            sha256="abc123",
+            source_kind="database_blob",
+            uploaded_by_admin_user_id=None,
+            uploaded_by_user_id_hash="user_1",
+            extracted_text="I prefer concise recruiter summaries and bullet-style responses.",
+        )
+        chunk = RagChunk(
+            id="chunk_user_1",
+            document_id=document.id,
+            chunk_index=0,
+            chunk_text="I prefer concise recruiter summaries and bullet-style responses.",
+            token_count=9,
+            embedding_vector=[0.0] * 32,
+        )
+        db.add(collection)
+        db.add(document)
+        db.add(chunk)
+        db.commit()
+
+        result = RagRetrievalService(db).retrieve(
+            tenant_id="tenant_1",
+            user_id_hash="user_1",
+            conversation_id="conv_no_overlap",
+            raw_prompt="What time is the meeting tomorrow?",
+            conversation_history=[],
+        )
+
+        assert result.user_chunk_count == 1
+        assert result.document_count == 1
+        assert result.assembled_references == [
+            {
+                "filename": "personal-notes.txt",
+                "chunk_text": "I prefer concise recruiter summaries and bullet-style responses.",
+            }
+        ]
+    finally:
+        db.close()
 
 
 def test_user_rag_limits_follow_canonical_membership_schema(client) -> None:

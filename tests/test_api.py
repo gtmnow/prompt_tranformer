@@ -9,6 +9,7 @@ from app.models.request_log import PromptTransformRequest
 from app.core.config import get_settings
 from app.db.session import get_db
 from app.services.guide_me_generation import GuideMeGenerationResult
+from app.services.rag_retrieval_service import RagRetrievalResult
 from app.services.llm_types import NormalizedTokenUsage
 from app.services.runtime_llm import RuntimeLlmConfig
 
@@ -19,13 +20,19 @@ AUTH_HEADERS = {
 }
 
 
-def _runtime_config(*, scoring_enabled: bool = True, model: str = "gpt-4.1") -> RuntimeLlmConfig:
+def _runtime_config(
+    *,
+    scoring_enabled: bool = True,
+    provider: str = "openai",
+    model: str = "gpt-4.1",
+    endpoint_url: str | None = "https://api.openai.com/v1",
+) -> RuntimeLlmConfig:
     return RuntimeLlmConfig(
         tenant_id="tenant_1",
         user_id_hash="user_1",
-        provider="openai",
+        provider=provider,
         model=model,
-        endpoint_url="https://api.openai.com/v1",
+        endpoint_url=endpoint_url,
         api_key="test-key",
         transformation_enabled=True,
         scoring_enabled=scoring_enabled,
@@ -246,6 +253,76 @@ def test_transform_falls_back_to_generic_default(client) -> None:
     assert body["task_type"] == "unknown"
     assert body["metadata"]["persona_source"] == "generic_default"
     assert body["metadata"]["used_fallback_model"] is True
+    assert body["metadata"]["resolved_model"] == "unknown-model"
+
+
+def test_execute_chat_keeps_runtime_xai_model_and_reports_retrieval_metadata(client) -> None:
+    _seed_final_profiles(client)
+
+    with (
+        patch(
+            "app.services.transformer_engine.RuntimeLlmResolver.resolve",
+            return_value=_runtime_config(
+                provider="xai",
+                model="grok-3-mini",
+                endpoint_url="https://api.x.ai/v1",
+            ),
+        ),
+        patch(
+            "app.services.transformer_engine.RagRetrievalService.retrieve",
+            return_value=RagRetrievalResult(
+                assembled_references=[
+                    {
+                        "filename": "resume-notes.txt",
+                        "chunk_text": "Candidate prefers concise scorecards and recruiter-facing summaries.",
+                    }
+                ],
+                tenant_chunk_count=0,
+                user_chunk_count=1,
+                document_count=1,
+            ),
+        ),
+        patch("app.services.final_response_service.httpx.Client") as httpx_client,
+    ):
+        mock_client = httpx_client.return_value.__enter__.return_value
+        mock_client.post.return_value.status_code = 200
+        mock_client.post.return_value.json.return_value = {
+            "choices": [
+                {
+                    "message": {
+                        "content": "Here is the xAI response.",
+                    }
+                }
+            ]
+        }
+
+        response = client.post(
+            "/api/chat/execute",
+            headers=AUTH_HEADERS,
+            json={
+                "session_id": "sess_xai_chat",
+                "conversation_id": "conv_xai_chat",
+                "user_id_hash": "user_1",
+                "raw_prompt": "Draft a concise recruiter summary.",
+                "target_llm": {"provider": "xai", "model": "grok-3-mini"},
+                "conversation_history": [],
+                "attachments": [],
+                "transform_enabled": True,
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["assistant_text"] == "Here is the xAI response."
+    assert body["metadata"]["resolved_provider"] == "xai"
+    assert body["metadata"]["resolved_model"] == "grok-3-mini"
+    assert body["metadata"]["used_fallback_model"] is True
+    assert body["metadata"]["retrieval_used"] is True
+    assert body["metadata"]["retrieval_scope_counts"] == {"tenant": 0, "user": 1}
+    assert body["metadata"]["retrieval_document_count"] == 1
+
+    request_json = mock_client.post.call_args.kwargs["json"]
+    assert request_json["model"] == "grok-3-mini"
 
 
 def test_user_rag_limits_follow_canonical_membership_schema(client) -> None:

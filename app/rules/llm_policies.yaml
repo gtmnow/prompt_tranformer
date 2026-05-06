@@ -33,3 +33,11 @@ providers:
         format_strictness: medium
         verbosity: high
         stepwise: helpful
+  xai:
+    default_model: grok-3
+    models:
+      grok-3:
+        structure_preference: medium
+        format_strictness: medium
+        verbosity: medium
+        stepwise: helpful

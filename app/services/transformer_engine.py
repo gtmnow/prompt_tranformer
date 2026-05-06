@@ -150,7 +150,7 @@ class TransformerEngine:
                 requested_provider=payload.target_llm.provider,
                 requested_model=payload.target_llm.model,
                 resolved_provider=runtime_llm.provider,
-                resolved_model=policy.resolved_model,
+                resolved_model=runtime_llm.model,
                 used_fallback_model=policy.used_fallback_model,
                 used_authoritative_tenant_llm=(
                     payload.target_llm.provider != runtime_llm.provider
@@ -193,7 +193,7 @@ class TransformerEngine:
                     "coaching_tip": coaching_tip,
                     "blocking_message": blocking_message,
                     "target_provider": runtime_llm.provider,
-                    "target_model": policy.resolved_model,
+                    "target_model": runtime_llm.model,
                     "persona_source": persona.source,
                     "used_fallback_model": policy.used_fallback_model,
                     "enforcement_level": effective_enforcement_level,
@@ -386,7 +386,7 @@ class TransformerEngine:
 
         assistant_result = self.final_response_service.generate(
             runtime_config=runtime_llm,
-            resolved_model=transform_response.metadata.resolved_model,
+            resolved_model=runtime_llm.model,
             transformed_prompt=transform_response.transformed_prompt or payload.raw_prompt,
             conversation_history=payload.conversation_history,
             attachments=payload.attachments,
@@ -399,7 +399,7 @@ class TransformerEngine:
                     category="final_response",
                     purpose="final_response",
                     provider=runtime_llm.provider,
-                    model=transform_response.metadata.resolved_model,
+                    model=runtime_llm.model,
                     usage=normalize_usage(runtime_llm.provider, assistant_result.usage),
                 ),
             )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import math
 import re
 import uuid
@@ -8,11 +9,13 @@ from dataclasses import dataclass
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.models.rag import RagChunk, RagCollection, RagDocument, RagRetrievalEvent
 from app.services.rag_limit_resolver import RagLimitResolver
 
 VECTOR_SIZE = 32
+logger = logging.getLogger("prompt_transformer.rag_retrieval")
 
 
 @dataclass(frozen=True)
@@ -70,21 +73,20 @@ class RagRetrievalService:
         user_count = sum(1 for item in combined if item["scope_type"] == "user")
         document_ids = {item["document_id"] for item in combined}
 
-        for rank, item in enumerate(combined, start=1):
-            self.db_session.add(
-                RagRetrievalEvent(
-                    id=str(uuid.uuid4()),
-                    conversation_id=conversation_id,
-                    user_id_hash=user_id_hash,
-                    tenant_id=tenant_id,
-                    scope_type=item["scope_type"],
-                    document_id=item["document_id"],
-                    chunk_id=item["chunk_id"],
-                    rank=rank,
-                    score=item["score"],
-                )
+        try:
+            self._persist_retrieval_events(
+                conversation_id=conversation_id,
+                user_id_hash=user_id_hash,
+                tenant_id=tenant_id,
+                combined=combined,
             )
-        self.db_session.flush()
+        except SQLAlchemyError:
+            logger.exception(
+                "rag_retrieval_event_persist_failed conversation_id=%s tenant_id=%s user_id_hash=%s",
+                conversation_id,
+                tenant_id,
+                user_id_hash,
+            )
         return RagRetrievalResult(
             assembled_references=[
                 {"filename": item["filename"], "chunk_text": item["chunk_text"]}
@@ -94,6 +96,32 @@ class RagRetrievalService:
             user_chunk_count=user_count,
             document_count=len(document_ids),
         )
+
+    def _persist_retrieval_events(
+        self,
+        *,
+        conversation_id: str,
+        user_id_hash: str,
+        tenant_id: str,
+        combined: list[dict[str, str | float]],
+    ) -> None:
+        # Retrieval analytics should never be able to take down end-user chat.
+        with self.db_session.begin_nested():
+            for rank, item in enumerate(combined, start=1):
+                self.db_session.add(
+                    RagRetrievalEvent(
+                        id=str(uuid.uuid4()),
+                        conversation_id=conversation_id,
+                        user_id_hash=user_id_hash,
+                        tenant_id=tenant_id,
+                        scope_type=str(item["scope_type"]),
+                        document_id=str(item["document_id"]),
+                        chunk_id=str(item["chunk_id"]),
+                        rank=rank,
+                        score=float(item["score"]),
+                    )
+                )
+            self.db_session.flush()
 
     def _retrieve_scope(
         self,

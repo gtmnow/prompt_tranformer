@@ -2,6 +2,7 @@ from unittest.mock import patch
 
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.db.seed import PROFILE_ROWS
 from app.models.profile import FinalProfile
@@ -657,6 +658,106 @@ def test_retrieval_events_write_against_canonical_herman_db_rag_schema(client) -
         assert isinstance(stored_score, (int, float))
     finally:
         db.close()
+
+
+def test_execute_chat_continues_when_retrieval_event_logging_fails(client) -> None:
+    from app.models.rag import RagChunk, RagCollection, RagDocument
+
+    _seed_final_profiles(client)
+    _recreate_canonical_rag_schema(client)
+    _seed_canonical_membership_schema(client)
+
+    db = next(client.app.dependency_overrides[get_db]())
+    try:
+        collection = RagCollection(
+            id="collection_user_resume",
+            scope_type="user",
+            tenant_id="tenant_1",
+            user_id_hash="user_1",
+            name="Personal Context",
+            is_active=True,
+            retrieval_enabled=True,
+            max_results=2,
+        )
+        document = RagDocument(
+            id="document_user_resume",
+            collection_id=collection.id,
+            scope_type="user",
+            tenant_id="tenant_1",
+            user_id_hash="user_1",
+            filename="resume.txt",
+            media_type="text/plain",
+            size_bytes=256,
+            status="ready",
+            status_message=None,
+            sha256="resumehash",
+            source_kind="database_blob",
+            uploaded_by_admin_user_id=None,
+            uploaded_by_user_id_hash="user_1",
+        )
+        chunk = RagChunk(
+            id="chunk_user_resume",
+            document_id=document.id,
+            chunk_index=0,
+            chunk_text="Experienced product marketer and growth operator with B2B SaaS hiring and GTM leadership background.",
+            token_count=14,
+            embedding_vector=[0.0] * 32,
+        )
+        db.add(collection)
+        db.add(document)
+        db.add(chunk)
+        db.commit()
+    finally:
+        db.close()
+
+    with (
+        patch(
+            "app.services.transformer_engine.RuntimeLlmResolver.resolve",
+            return_value=_runtime_config(
+                provider="xai",
+                model="grok-3-mini",
+                endpoint_url="https://api.x.ai/v1",
+            ),
+        ),
+        patch(
+            "app.services.rag_retrieval_service.RagRetrievalService._persist_retrieval_events",
+            side_effect=SQLAlchemyError("rag analytics write failed"),
+        ),
+        patch("app.services.final_response_service.httpx.Client") as httpx_client,
+    ):
+        mock_client = httpx_client.return_value.__enter__.return_value
+        mock_client.post.return_value.status_code = 200
+        mock_client.post.return_value.json.return_value = {
+            "choices": [
+                {
+                    "message": {
+                        "content": "Your background best fits GTM, lifecycle, and product marketing roles.",
+                    }
+                }
+            ]
+        }
+
+        response = client.post(
+            "/api/chat/execute",
+            headers=AUTH_HEADERS,
+            json={
+                "session_id": "sess_resume_market_fit",
+                "conversation_id": "conv_resume_market_fit",
+                "user_id_hash": "user_1",
+                "raw_prompt": "based on my resume what kind of jobs are my best fit in today's marketplace?",
+                "target_llm": {"provider": "xai", "model": "grok-3-mini"},
+                "conversation_history": [],
+                "attachments": [],
+                "transform_enabled": True,
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["assistant_text"] == "Your background best fits GTM, lifecycle, and product marketing roles."
+    assert body["metadata"]["retrieval_used"] is True
+    assert body["metadata"]["retrieval_scope_counts"]["user"] == 1
+    assert body["metadata"]["retrieval_document_count"] == 1
 
 
 def test_user_rag_limits_follow_canonical_membership_schema(client) -> None:

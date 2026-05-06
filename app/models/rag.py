@@ -5,7 +5,6 @@ from datetime import datetime
 from sqlalchemy import (
     BigInteger,
     Boolean,
-    CheckConstraint,
     DateTime,
     Float,
     ForeignKey,
@@ -24,19 +23,13 @@ from app.db.base import Base
 
 class RagQuotaPolicy(Base):
     __tablename__ = "rag_quota_policies"
-    __table_args__ = (
-        CheckConstraint(
-            "scope_target in ('global_default', 'service_tier', 'tenant_override')",
-            name="ck_rag_quota_policies_scope_target",
-        ),
-    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     policy_key: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
-    scope_target: Mapped[str] = mapped_column(String(32), nullable=False)
+    scope_target: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
     service_tier_definition_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     tenant_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
-    user_type: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    user_type: Mapped[int | None] = mapped_column(Integer, nullable=True)
     org_max_file_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     user_max_file_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     org_max_document_count: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -62,19 +55,10 @@ class RagQuotaPolicy(Base):
 
 class RagCollection(Base):
     __tablename__ = "rag_collections"
-    __table_args__ = (
-        CheckConstraint("scope_type in ('tenant', 'user')", name="ck_rag_collections_scope_type"),
-        CheckConstraint(
-            "(scope_type = 'tenant' and tenant_id is not null and user_id_hash is null)"
-            " or (scope_type = 'user' and tenant_id is not null and user_id_hash is not null)",
-            name="ck_rag_collections_scope_identity",
-        ),
-        UniqueConstraint("scope_type", "tenant_id", "user_id_hash", name="uq_rag_collections_scope_identity"),
-    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    scope_type: Mapped[str] = mapped_column(String(20), nullable=False)
-    tenant_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    scope_type: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     user_id_hash: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
@@ -91,25 +75,18 @@ class RagCollection(Base):
 
 class RagDocument(Base):
     __tablename__ = "rag_documents"
-    __table_args__ = (
-        CheckConstraint("scope_type in ('tenant', 'user')", name="ck_rag_documents_scope_type"),
-        CheckConstraint(
-            "status in ('pending', 'processing', 'ready', 'failed', 'disabled')",
-            name="ck_rag_documents_status",
-        ),
-    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    collection_id: Mapped[str] = mapped_column(ForeignKey("rag_collections.id", ondelete="CASCADE"), nullable=False, index=True)
-    scope_type: Mapped[str] = mapped_column(String(20), nullable=False)
-    tenant_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    collection_id: Mapped[str] = mapped_column(ForeignKey("rag_collections.id"), nullable=False, index=True)
+    scope_type: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     user_id_hash: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     filename: Mapped[str] = mapped_column(String(255), nullable=False)
     media_type: Mapped[str | None] = mapped_column(String(120), nullable=True)
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="pending", index=True)
     status_message: Mapped[str | None] = mapped_column(Text, nullable=True)
-    sha256: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     source_kind: Mapped[str] = mapped_column(String(30), nullable=False, default="database_blob")
     uploaded_by_admin_user_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     uploaded_by_user_id_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -122,7 +99,7 @@ class RagDocumentBlob(Base):
     __tablename__ = "rag_document_blobs"
 
     document_id: Mapped[str] = mapped_column(
-        ForeignKey("rag_documents.id", ondelete="CASCADE"),
+        ForeignKey("rag_documents.id"),
         primary_key=True,
     )
     content_bytes: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
@@ -135,7 +112,7 @@ class RagChunk(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    document_id: Mapped[str] = mapped_column(ForeignKey("rag_documents.id", ondelete="CASCADE"), nullable=False, index=True)
+    document_id: Mapped[str] = mapped_column(ForeignKey("rag_documents.id"), nullable=False, index=True)
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
     chunk_text: Mapped[str] = mapped_column(Text, nullable=False)
     token_count: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -150,10 +127,10 @@ class RagRetrievalEvent(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     conversation_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     user_id_hash: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
-    tenant_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     scope_type: Mapped[str] = mapped_column(String(20), nullable=False)
-    document_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
-    chunk_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    document_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    chunk_id: Mapped[str] = mapped_column(String(36), nullable=False)
     rank: Mapped[int] = mapped_column(Integer, nullable=False)
     score: Mapped[float] = mapped_column(Float, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())

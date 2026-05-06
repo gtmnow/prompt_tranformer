@@ -10,6 +10,7 @@ from app.models.prompt_score import ConversationPromptScore
 from app.models.request_log import PromptTransformRequest
 from app.core.config import get_settings
 from app.db.session import get_db
+from app.models.rag import RagCollection, RagDocument, RagQuotaPolicy, RagRetrievalEvent
 from app.services.guide_me_generation import GuideMeGenerationResult
 from app.services.rag_retrieval_service import RagRetrievalResult
 from app.services.llm_types import NormalizedTokenUsage
@@ -64,6 +65,29 @@ def _update_profile(client, user_id: str, **overrides) -> None:
         db.commit()
     finally:
         db.close()
+
+
+def _sqlite_columns(client, table_name: str) -> dict[str, dict[str, object]]:
+    db = next(client.app.dependency_overrides[get_db]())
+    try:
+        rows = db.execute(text(f"pragma table_info('{table_name}')")).mappings().all()
+        return {str(row["name"]): dict(row) for row in rows}
+    finally:
+        db.close()
+
+
+def test_metadata_created_rag_schema_matches_canonical_column_contract(client) -> None:
+    quota_columns = _sqlite_columns(client, RagQuotaPolicy.__tablename__)
+    collection_columns = _sqlite_columns(client, RagCollection.__tablename__)
+    document_columns = _sqlite_columns(client, RagDocument.__tablename__)
+    retrieval_columns = _sqlite_columns(client, RagRetrievalEvent.__tablename__)
+
+    assert quota_columns["scope_target"]["type"].upper() == "VARCHAR(30)"
+    assert collection_columns["tenant_id"]["notnull"] == 0
+    assert document_columns["tenant_id"]["notnull"] == 0
+    assert document_columns["status"]["type"].upper() == "VARCHAR(30)"
+    assert retrieval_columns["tenant_id"]["notnull"] == 0
+    assert retrieval_columns["score"]["type"].upper() in {"FLOAT", "REAL"}
 
 
 def _seed_canonical_membership_schema(client) -> None:

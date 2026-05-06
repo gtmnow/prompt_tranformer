@@ -1,5 +1,5 @@
 default:
-  request_timeout_seconds: 15.0
+  request_timeout_seconds: 45.0
   api_family: responses
   endpoint_path: /responses
   auth_scheme: bearer

@@ -1,3 +1,5 @@
+import httpx
+
 from unittest.mock import patch
 
 from sqlalchemy import text
@@ -534,6 +536,50 @@ def test_execute_chat_keeps_runtime_xai_model_and_reports_retrieval_metadata(cli
 
     request_json = mock_client.post.call_args.kwargs["json"]
     assert request_json["model"] == "grok-3-mini"
+
+
+def test_execute_chat_returns_504_when_final_response_provider_times_out(client) -> None:
+    _seed_final_profiles(client)
+
+    with (
+        patch(
+            "app.services.transformer_engine.RuntimeLlmResolver.resolve",
+            return_value=_runtime_config(),
+        ),
+        patch(
+            "app.services.transformer_engine.RagRetrievalService.retrieve",
+            return_value=RagRetrievalResult(
+                assembled_references=[],
+                tenant_chunk_count=0,
+                user_chunk_count=0,
+                document_count=0,
+            ),
+        ),
+        patch("app.services.final_response_service.httpx.Client") as httpx_client,
+    ):
+        mock_client = httpx_client.return_value.__enter__.return_value
+        mock_client.post.side_effect = httpx.ReadTimeout(
+            "The read operation timed out",
+            request=httpx.Request("POST", "https://api.openai.com/v1/responses"),
+        )
+
+        response = client.post(
+            "/api/chat/execute",
+            headers=AUTH_HEADERS,
+            json={
+                "session_id": "sess_timeout",
+                "conversation_id": "conv_timeout",
+                "user_id_hash": "user_1",
+                "raw_prompt": "Draft a concise recruiter summary.",
+                "target_llm": {"provider": "openai", "model": "gpt-4.1"},
+                "conversation_history": [],
+                "attachments": [],
+                "transform_enabled": True,
+            },
+        )
+
+    assert response.status_code == 504
+    assert response.json()["detail"] == "LLM provider timed out after 45 seconds."
 
 
 def test_user_scope_retrieval_falls_back_to_recent_chunks_when_query_has_no_overlap(client) -> None:

@@ -44,6 +44,15 @@ class FinalResponseResult:
     usage: dict[str, Any] | None
 
 
+@dataclass(frozen=True)
+class FinalResponseProviderError(Exception):
+    message: str
+    status_code: int = 502
+
+    def __str__(self) -> str:
+        return self.message
+
+
 class FinalResponseService:
     def __init__(self) -> None:
         self.provider_profiles = LlmProviderProfileService()
@@ -100,12 +109,26 @@ class FinalResponseService:
             max_output_tokens=800,
         )
 
-        with httpx.Client(timeout=profile.request_timeout_seconds) as client:
-            response = client.post(url, headers=headers, json=payload)
+        try:
+            with httpx.Client(timeout=profile.request_timeout_seconds) as client:
+                response = client.post(url, headers=headers, json=payload)
+        except httpx.TimeoutException as exc:
+            raise FinalResponseProviderError(
+                f"LLM provider timed out after {profile.request_timeout_seconds:g} seconds.",
+                status_code=504,
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise FinalResponseProviderError(
+                f"LLM provider request failed before a response was received: {exc}",
+                status_code=502,
+            ) from exc
 
         if response.status_code >= 400:
             detail = _extract_error_detail(response)
-            raise ValueError(f"LLM provider request failed: {detail}")
+            raise FinalResponseProviderError(
+                f"LLM provider request failed: {detail}",
+                status_code=_map_provider_status_code(response.status_code),
+            )
 
         data = response.json()
         text = _extract_output_text(data, profile=profile)
@@ -297,6 +320,14 @@ def _extract_error_detail(response: httpx.Response) -> str:
         if isinstance(detail, str) and detail.strip():
             return detail.strip()
     return response.text or f"status {response.status_code}"
+
+
+def _map_provider_status_code(status_code: int) -> int:
+    if status_code in {408, 504}:
+        return 504
+    if status_code == 429:
+        return 503
+    return 502
 
 
 def _wants_image_generation(prompt: str) -> bool:

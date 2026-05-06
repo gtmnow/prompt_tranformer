@@ -27,6 +27,7 @@ from app.schemas.transform import (
 )
 from app.services.profile_resolver import ProfileResolver
 from app.services.conversation_scores import ConversationScoreService
+from app.services.final_response_service import FinalResponseProviderError
 from app.services.llm_types import NormalizedTokenUsage
 from app.services.rag_ingestion_service import RagIngestionService
 from app.services.rag_limit_resolver import RagLimitResolver
@@ -142,6 +143,11 @@ def execute_chat(
     try:
         engine = TransformerEngine(db_session=db)
         return engine.execute_chat(payload)
+    except FinalResponseProviderError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=str(exc),
+        ) from exc
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

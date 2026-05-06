@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Prompt Transformer is a runtime prompt construction service. It accepts a raw prompt and rewrites it using:
+Prompt Transformer is a runtime prompt construction and chat-execution service. It accepts a raw prompt and rewrites it using:
 
 - a profile from `final_profile`
 - task inference rules
@@ -10,7 +10,7 @@ Prompt Transformer is a runtime prompt construction service. It accepts a raw pr
 - optional summary persona overrides
 - optional LLM-assisted prompt structure evaluation and scoring inputs
 
-The transformed prompt construction path remains deterministic. The service may optionally call a small evaluator model for structure extraction and future hybrid scoring, but it does not generate or update user profiles.
+The transformed prompt construction path remains deterministic. The service may optionally call a small evaluator model for structure extraction and future hybrid scoring, and the chat execution path may optionally attach relevance-gated reference context before the final provider call. It does not generate or update user profiles.
 
 ## Request lifecycle
 
@@ -28,7 +28,8 @@ The transformed prompt construction path remains deterministic. The service may 
 9. `PromptScoringService` computes the structural score and persists the conversation rollup.
 10. `TransformerEngine._build_prompt()` constructs the transformed prompt only when the request is allowed to proceed.
 11. `RequestLogger` optionally persists a debug log row.
-12. The API returns a typed result containing either a transformed prompt, coaching guidance, or a blocked outcome.
+12. `TransformerEngine.execute_chat()` may run retrieval for substantive prompts, compress the resulting references, and send the final request to the resolved provider.
+13. The API returns a typed result containing either a transformed prompt, coaching guidance, a blocked outcome, or a final assistant response.
 
 ## Design principles
 
@@ -36,6 +37,7 @@ The transformed prompt construction path remains deterministic. The service may 
 - Database-first: runtime personalization comes only from `final_profile`.
 - Stateless: no session memory outside request logging.
 - Explicit fallback paths: missing users and unknown models degrade safely.
+- Budget-aware retrieval: reference context must clear a relevance threshold and fit within a bounded prompt budget.
 
 For scoring and structure extraction, the long-term design is hybrid:
 
@@ -95,6 +97,12 @@ For scoring and structure extraction, the long-term design is hybrid:
   - deterministic PII findings
 - `app/services/transformer_engine.py`
   - orchestration, gating, and prompt construction
+- `app/services/final_response_service.py`
+  - provider request shaping and final answer execution
+- `app/services/rag_retrieval_service.py`
+  - similarity-gated reference lookup for tenant and user knowledge
+- `app/services/rag_prompt_assembly_service.py`
+  - extractive reference compression and prompt-budget enforcement
 - `app/services/request_logger.py`
   - optional request persistence
 - `app/services/prompt_scoring.py`

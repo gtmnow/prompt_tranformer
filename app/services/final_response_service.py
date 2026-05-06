@@ -5,6 +5,7 @@ from typing import Any
 
 import httpx
 
+from app.core.config import get_settings
 from app.schemas.transform import AttachmentReference, ConversationHistoryTurn, GeneratedImagePayload
 from app.services.llm_provider_profiles import LlmProviderProfileService, ResolvedLlmProviderProfile
 from app.services.runtime_llm import RuntimeLlmConfig
@@ -106,7 +107,7 @@ class FinalResponseService:
             image_attachments=image_attachments,
             document_attachments=document_attachments,
             wants_image_generation=wants_image_generation,
-            max_output_tokens=800,
+            max_output_tokens=runtime_config_output_tokens(runtime_config),
         )
 
         try:
@@ -140,6 +141,10 @@ class FinalResponseService:
 
         usage = data.get("usage") if isinstance(data.get("usage"), dict) else None
         return FinalResponseResult(text=text, generated_images=generated_images, usage=usage)
+
+
+def runtime_config_output_tokens(runtime_config: RuntimeLlmConfig) -> int:
+    return get_settings().final_response_max_output_tokens
 
 
 def _build_openai_like_payload(

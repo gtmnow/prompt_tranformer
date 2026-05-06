@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     herman_db_canonical_mode: bool = False
     herman_db_version_table: str = "alembic_version"
     herman_db_allowed_revisions_raw: str = Field(
-        default="20260504_0006,20260504_0007,20260504_0008,20260504_0009,20260505_0010,20260505_0011,20260505_0012,20260505_0013,20260505_0014,20260505_0015",
+        default="20260504_0006,20260504_0007,20260504_0008,20260504_0009,20260505_0010,20260505_0011,20260505_0012,20260505_0013,20260505_0014,20260505_0015,20260506_0016",
         validation_alias=AliasChoices("HERMAN_DB_ALLOWED_REVISIONS", "HERMAN_DB_ALLOWED_REVISIONS_RAW"),
     )
     host: str = "0.0.0.0"
@@ -48,6 +48,13 @@ class Settings(BaseSettings):
     db_pool_size: int = 20
     db_max_overflow: int = 40
     db_pool_timeout_seconds: float = 15.0
+    enable_reference_retrieval: bool = True
+    reference_retrieval_min_query_terms: int = 4
+    reference_retrieval_min_score: float = 0.08
+    reference_context_max_sources: int = 3
+    reference_context_max_words: int = 220
+    reference_context_max_words_per_source: int = 80
+    final_response_max_output_tokens: int = 600
 
     model_config = SettingsConfigDict(
         env_file=".env",

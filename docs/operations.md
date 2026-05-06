@@ -15,8 +15,6 @@ Required in most deployments:
 
 Startup/deployment helpers:
 
-- `RAILWAY_AUTO_MIGRATE`
-- `RAILWAY_SEED_ON_START`
 - `HOST`
 
 Optional structure evaluator settings:
@@ -35,16 +33,16 @@ Optional structure evaluator settings:
 3. Run `python -m app.db.seed`
 4. Start with `uvicorn app.main:app --reload`
 
-The local Alembic flow is for local app-managed databases. Shared Herman DB environments should be migrated by the canonical `herman-db` migration stream, with `prompt_transformer` validating the shared revision instead of applying app-local migrations.
+The local Alembic flow is for local app-managed databases. Shared Herman DB environments should be migrated by the canonical `herman-db` migration stream.
 
 ## Railway startup behavior
 
 `python3 -m app.run_server` does this:
 
 1. read environment config
-2. validate the canonical shared schema if Herman canonical mode is active, otherwise run migrations when `RAILWAY_AUTO_MIGRATE=true`
-3. run seed if `RAILWAY_SEED_ON_START=true`
-4. launch Uvicorn
+2. launch Uvicorn
+
+Schema migration and seeding are owned by `projects/herman-db` only, not by this service.
 
 ## First Railway deploy checklist
 
@@ -52,12 +50,9 @@ The local Alembic flow is for local app-managed databases. Shared Herman DB envi
 2. Set `REQUIRE_SERVICE_AUTH=true`
 3. Set `PROMPT_TRANSFORMER_API_KEY=<shared service credential>`
 4. Set `ALLOWED_CLIENT_IDS=hermanprompt`
-5. Set `RAILWAY_AUTO_MIGRATE=true`
-6. Set `RAILWAY_SEED_ON_START=true`
-7. Deploy
-8. Verify `GET /api/health`
-9. Verify authenticated `POST /api/transform_prompt`
-10. Set `RAILWAY_SEED_ON_START=false`
+5. Deploy
+6. Verify `GET /api/health`
+7. Verify authenticated `POST /api/transform_prompt`
 
 ## Smoke tests
 
@@ -95,12 +90,10 @@ Expected behavior for `user_1`:
 ## Prompt enforcement deploy checklist
 
 1. Confirm Railway is deploying the repo on `main`
-2. Keep `RAILWAY_AUTO_MIGRATE=true` so `20260417_0002_prompt_enforcement_fields.py` applies on boot
-3. Leave `RAILWAY_SEED_ON_START=false` unless you intentionally want to reseed demo users
-4. If using LLM-based prompt evaluation, set `STRUCTURE_EVALUATOR_ENABLED=true`
-5. Set either `STRUCTURE_EVALUATOR_API_KEY` or `OPENAI_API_KEY`
-6. Optionally set `STRUCTURE_EVALUATOR_MODEL=gpt-4.1-mini`
-7. After deploy, verify `POST /api/transform_prompt` returns `coaching` for a minimal `full`-enforcement prompt such as `tell me a joke`
+2. If using LLM-based prompt evaluation, set `STRUCTURE_EVALUATOR_ENABLED=true`
+3. Set either `STRUCTURE_EVALUATOR_API_KEY` or `OPENAI_API_KEY`
+4. Optionally set `STRUCTURE_EVALUATOR_MODEL=gpt-4.1-mini`
+5. After deploy, verify `POST /api/transform_prompt` returns `coaching` for a minimal `full`-enforcement prompt such as `tell me a joke`
 
 ## Troubleshooting
 
@@ -130,13 +123,11 @@ Fix:
 Cause:
 
 - seed data was not loaded
-
+ 
 Fix:
 
-- set `RAILWAY_SEED_ON_START=true`
-- redeploy once
-- test again
-- switch it back to `false`
+- run seed through `projects/herman-db` migration/seed path
+- verify the shared DB seed run completed
 
 ### App crashes during migration/boot
 

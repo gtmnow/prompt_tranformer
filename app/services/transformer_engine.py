@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 
 from sqlalchemy.orm import Session
@@ -399,13 +400,30 @@ class TransformerEngine:
                 metadata=transform_response.metadata,
             )
 
+        reference_context = self._build_reference_context(runtime_llm.tenant_id, payload, transform_response)
+        self._populate_final_prompt_metadata(
+            metadata=transform_response.metadata,
+            transformed_prompt=transform_response.transformed_prompt or payload.raw_prompt,
+            reference_context=reference_context,
+        )
+        final_response_started_at = time.perf_counter()
         assistant_result = self.final_response_service.generate(
             runtime_config=runtime_llm,
             resolved_model=runtime_llm.model,
             transformed_prompt=transform_response.transformed_prompt or payload.raw_prompt,
             conversation_history=payload.conversation_history,
             attachments=payload.attachments,
-            reference_context=self._build_reference_context(runtime_llm.tenant_id, payload, transform_response),
+            reference_context=reference_context,
+        )
+        transform_response.metadata.final_response_latency_ms = (
+            time.perf_counter() - final_response_started_at
+        ) * 1000
+        self._emit_execute_chat_log(
+            payload=payload,
+            runtime_llm=runtime_llm,
+            metadata=transform_response.metadata,
+            conversation_history_count=len(payload.conversation_history),
+            attachment_count=len(payload.attachments),
         )
         if transform_response.metadata.request_log_id is not None:
             self.request_logger.set_final_response_usage(
@@ -460,6 +478,22 @@ class TransformerEngine:
         conversation_history: list,
         metadata: TransformMetadata,
     ) -> str | None:
+        metadata.retrieval_used = False
+        metadata.retrieval_scope_counts = {"tenant": 0, "user": 0}
+        metadata.retrieval_document_count = 0
+        metadata.reference_context_word_count = 0
+
+        if not self.settings.enable_reference_retrieval:
+            metadata.retrieval_skipped_reason = "disabled"
+            return None
+        if not tenant_id.strip():
+            metadata.retrieval_skipped_reason = "missing_tenant"
+            return None
+        if not self._should_run_retrieval(raw_prompt):
+            metadata.retrieval_skipped_reason = "query_too_short"
+            return None
+
+        metadata.retrieval_skipped_reason = None
         retrieval = self.rag_retrieval.retrieve(
             tenant_id=tenant_id,
             user_id_hash=user_id_hash,
@@ -475,8 +509,68 @@ class TransformerEngine:
         metadata.retrieval_document_count = retrieval.document_count
         if not retrieval.assembled_references:
             return None
-        return self.rag_prompt_assembly.assemble(
+        reference_context = self.rag_prompt_assembly.assemble(
             references=retrieval.assembled_references,
+            query_text=raw_prompt,
+            max_sources=self.settings.reference_context_max_sources,
+            max_total_words=self.settings.reference_context_max_words,
+            max_words_per_source=self.settings.reference_context_max_words_per_source,
+        )
+        metadata.retrieval_used = bool(reference_context)
+        metadata.reference_context_word_count = self._word_count(reference_context)
+        return reference_context
+
+    def _should_run_retrieval(self, raw_prompt: str) -> bool:
+        query_terms = [
+            token
+            for token in re.findall(r"[a-z0-9]+", raw_prompt.lower())
+            if len(token) >= 4
+        ]
+        return len(query_terms) >= self.settings.reference_retrieval_min_query_terms
+
+    def _populate_final_prompt_metadata(
+        self,
+        *,
+        metadata: TransformMetadata,
+        transformed_prompt: str,
+        reference_context: str | None,
+    ) -> None:
+        final_prompt = transformed_prompt if not reference_context else f"{reference_context}\n\n{transformed_prompt}"
+        metadata.final_prompt_char_count = len(final_prompt)
+        metadata.final_prompt_word_count = self._word_count(final_prompt)
+
+    def _word_count(self, text: str | None) -> int:
+        if not text:
+            return 0
+        return len(re.findall(r"[a-z0-9]+", text.lower()))
+
+    def _emit_execute_chat_log(
+        self,
+        *,
+        payload: ExecuteChatRequest,
+        runtime_llm: RuntimeLlmConfig,
+        metadata: TransformMetadata,
+        conversation_history_count: int,
+        attachment_count: int,
+    ) -> None:
+        if not self.settings.enable_transform_timing_logs:
+            return
+
+        logger.info(
+            "execute_chat_timing session_id=%s conversation_id=%s user_id_hash=%s provider=%s model=%s retrieval_used=%s retrieval_skipped_reason=%s reference_words=%s final_prompt_chars=%s final_prompt_words=%s final_response_ms=%.1f history_turns=%s attachments=%s",
+            payload.session_id,
+            payload.conversation_id,
+            payload.user_id_hash,
+            runtime_llm.provider,
+            runtime_llm.model,
+            metadata.retrieval_used,
+            metadata.retrieval_skipped_reason or "",
+            metadata.reference_context_word_count,
+            metadata.final_prompt_char_count,
+            metadata.final_prompt_word_count,
+            metadata.final_response_latency_ms or 0.0,
+            conversation_history_count,
+            attachment_count,
         )
 
     def generate_guide_me_helper(self, payload: GuideMeHelperRequest) -> GuideMeHelperResponse:

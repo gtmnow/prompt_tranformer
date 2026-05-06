@@ -15,6 +15,7 @@ from app.db.session import get_db
 from app.models.rag import RagCollection, RagDocument, RagQuotaPolicy, RagRetrievalEvent
 from app.services.guide_me_generation import GuideMeGenerationResult
 from app.services.rag_retrieval_service import RagRetrievalResult
+from app.services.rag_vectorizer import vectorize_text
 from app.services.llm_types import NormalizedTokenUsage
 from app.services.runtime_llm import RuntimeLlmConfig
 
@@ -582,7 +583,7 @@ def test_execute_chat_returns_504_when_final_response_provider_times_out(client)
     assert response.json()["detail"] == "LLM provider timed out after 45 seconds."
 
 
-def test_user_scope_retrieval_falls_back_to_recent_chunks_when_query_has_no_overlap(client) -> None:
+def test_user_scope_retrieval_skips_unrelated_chunks_when_query_has_no_overlap(client) -> None:
     from app.models.rag import RagChunk, RagCollection, RagDocument
     from app.services.rag_retrieval_service import RagRetrievalService
 
@@ -622,7 +623,7 @@ def test_user_scope_retrieval_falls_back_to_recent_chunks_when_query_has_no_over
             chunk_index=0,
             chunk_text="I prefer concise recruiter summaries and bullet-style responses.",
             token_count=9,
-            embedding_vector=[0.0] * 32,
+            embedding_vector=vectorize_text("I prefer concise recruiter summaries and bullet-style responses."),
         )
         db.add(collection)
         db.add(document)
@@ -637,14 +638,9 @@ def test_user_scope_retrieval_falls_back_to_recent_chunks_when_query_has_no_over
             conversation_history=[],
         )
 
-        assert result.user_chunk_count == 1
-        assert result.document_count == 1
-        assert result.assembled_references == [
-            {
-                "filename": "personal-notes.txt",
-                "chunk_text": "I prefer concise recruiter summaries and bullet-style responses.",
-            }
-        ]
+        assert result.user_chunk_count == 0
+        assert result.document_count == 0
+        assert result.assembled_references == []
     finally:
         db.close()
 
@@ -707,7 +703,7 @@ def test_retrieval_events_write_against_canonical_herman_db_rag_schema(client) -
             chunk_index=0,
             chunk_text="I prefer concise recruiter summaries and bullet-style responses.",
             token_count=9,
-            embedding_vector=[0.0] * 32,
+            embedding_vector=vectorize_text("I prefer concise recruiter summaries and bullet-style responses."),
         )
         db.add(collection)
         db.add(document)
@@ -771,7 +767,9 @@ def test_execute_chat_continues_when_retrieval_event_logging_fails(client) -> No
             chunk_index=0,
             chunk_text="Experienced product marketer and growth operator with B2B SaaS hiring and GTM leadership background.",
             token_count=14,
-            embedding_vector=[0.0] * 32,
+            embedding_vector=vectorize_text(
+                "Experienced product marketer and growth operator with B2B SaaS hiring and GTM leadership background."
+            ),
         )
         db.add(collection)
         db.add(document)
@@ -828,6 +826,46 @@ def test_execute_chat_continues_when_retrieval_event_logging_fails(client) -> No
     assert body["metadata"]["retrieval_used"] is True
     assert body["metadata"]["retrieval_scope_counts"]["user"] == 1
     assert body["metadata"]["retrieval_document_count"] == 1
+
+
+def test_execute_chat_skips_retrieval_for_short_queries_and_reports_reason(client) -> None:
+    _seed_final_profiles(client)
+
+    with (
+        patch(
+            "app.services.transformer_engine.RuntimeLlmResolver.resolve",
+            return_value=_runtime_config(),
+        ),
+        patch("app.services.transformer_engine.RagRetrievalService.retrieve") as retrieve_mock,
+        patch("app.services.final_response_service.httpx.Client") as httpx_client,
+    ):
+        mock_client = httpx_client.return_value.__enter__.return_value
+        mock_client.post.return_value.status_code = 200
+        mock_client.post.return_value.json.return_value = {
+            "output_text": "Sure."
+        }
+
+        response = client.post(
+            "/api/chat/execute",
+            headers=AUTH_HEADERS,
+            json={
+                "session_id": "sess_short_query",
+                "conversation_id": "conv_short_query",
+                "user_id_hash": "user_1",
+                "raw_prompt": "Hi there",
+                "target_llm": {"provider": "openai", "model": "gpt-4.1"},
+                "conversation_history": [],
+                "attachments": [],
+                "transform_enabled": True,
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["assistant_text"] == "Sure."
+    assert body["metadata"]["retrieval_used"] is False
+    assert body["metadata"]["retrieval_skipped_reason"] == "query_too_short"
+    retrieve_mock.assert_not_called()
 
 
 def test_user_rag_limits_follow_canonical_membership_schema(client) -> None:

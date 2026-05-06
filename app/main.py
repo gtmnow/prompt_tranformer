@@ -2,6 +2,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+import logging
 from fastapi.exceptions import RequestValidationError
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
@@ -11,18 +12,27 @@ from app.core.config import get_settings
 from app.core.logging import configure_application_logging
 from app.core.rules import get_rule_registry
 from app.db.session import engine
-from app.schema_contract import validate_schema_contract
+from app.schema_contract import SchemaContractError, validate_schema_contract
+
+
+logger = logging.getLogger("prompt_transformer.main")
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     if settings.effective_herman_db_canonical_mode:
-        validate_schema_contract(
-            engine=engine,
-            version_table=settings.herman_db_version_table,
-            allowed_revisions=settings.herman_db_allowed_revisions,
-        )
+        try:
+            validate_schema_contract(
+                engine=engine,
+                version_table=settings.herman_db_version_table,
+                allowed_revisions=settings.herman_db_allowed_revisions,
+            )
+        except SchemaContractError:
+            logger.warning(
+                "Schema contract validation failed during startup, continuing with shared DB ownership model.",
+                exc_info=True,
+            )
     get_rule_registry()
     yield
 

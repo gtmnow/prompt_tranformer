@@ -1,4 +1,5 @@
 alembic>=1.13.2
+build>=1.2.2
 cryptography>=46.0.0,<47.0.0
 fastapi>=0.115.0
 python-multipart>=0.0.9
@@ -9,3 +10,4 @@ pydantic-settings>=2.4.0
 pyyaml>=6.0.2
 sqlalchemy>=2.0.34
 uvicorn[standard]>=0.30.6
+wheel>=0.45.1

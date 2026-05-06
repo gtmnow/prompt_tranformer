@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import hashlib
 import logging
-import math
 import re
 import uuid
 from dataclasses import dataclass
@@ -12,9 +10,10 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.models.rag import RagChunk, RagCollection, RagDocument, RagRetrievalEvent
+from app.core.config import get_settings
 from app.services.rag_limit_resolver import RagLimitResolver
+from app.services.rag_vectorizer import vectorize_text
 
-VECTOR_SIZE = 32
 logger = logging.getLogger("prompt_transformer.rag_retrieval")
 
 
@@ -29,6 +28,7 @@ class RagRetrievalResult:
 class RagRetrievalService:
     def __init__(self, db_session: Session) -> None:
         self.db_session = db_session
+        self.settings = get_settings()
         self.limit_resolver = RagLimitResolver(db_session)
 
     def retrieve(
@@ -46,6 +46,7 @@ class RagRetrievalService:
                 f"{turn.transformed_text}\n{turn.assistant_text}" for turn in conversation_history[-2:]
             )
         query_vector = self._vectorize(query_text)
+        query_terms = self._query_terms(query_text)
         tenant_limits = self.limit_resolver.resolve_tenant_limits(tenant_id)
         user_limits = self.limit_resolver.resolve_user_limits(tenant_id, user_id_hash)
 
@@ -54,6 +55,7 @@ class RagRetrievalService:
             tenant_id=tenant_id,
             user_id_hash=None,
             query_vector=query_vector,
+            query_terms=query_terms,
             top_k=tenant_limits.max_retrieved_chunks,
         )
         user_results = self._retrieve_scope(
@@ -61,6 +63,7 @@ class RagRetrievalService:
             tenant_id=tenant_id,
             user_id_hash=user_id_hash,
             query_vector=query_vector,
+            query_terms=query_terms,
             top_k=user_limits.max_retrieved_chunks,
         )
 
@@ -130,6 +133,7 @@ class RagRetrievalService:
         tenant_id: str,
         user_id_hash: str | None,
         query_vector: list[float],
+        query_terms: set[str],
         top_k: int,
     ) -> list[dict[str, str | float]]:
         if top_k <= 0:
@@ -154,8 +158,8 @@ class RagRetrievalService:
             )
         ).all()
         scored: list[dict[str, str | float | int]] = []
-        fallback_candidates: list[dict[str, str | float | int]] = []
         for chunk, document in rows:
+            searchable_text = f"{document.filename} {chunk.chunk_text}"
             item = {
                 "scope_type": document.scope_type,
                 "document_id": document.id,
@@ -163,35 +167,16 @@ class RagRetrievalService:
                 "filename": document.filename,
                 "chunk_text": chunk.chunk_text,
                 "score": 0.0,
-                "sort_epoch": document.uploaded_at.timestamp() if document.uploaded_at else 0.0,
-                "chunk_index": chunk.chunk_index,
             }
+            if self._keyword_overlap(query_terms, searchable_text) <= 0:
+                continue
             score = self._cosine(query_vector, chunk.embedding_vector or [])
-            if score > 0:
+            if score >= self.settings.reference_retrieval_min_score:
                 item["score"] = score
                 scored.append(item)
-                continue
-            if scope == "user":
-                fallback_candidates.append(item)
         limit = collection.max_results if collection.max_results is not None else top_k
         effective_limit = min(top_k, limit)
         ranked = sorted(scored, key=lambda item: float(item["score"]), reverse=True)[:effective_limit]
-
-        if scope == "user" and len(ranked) < effective_limit and fallback_candidates:
-            seen_chunk_ids = {str(item["chunk_id"]) for item in ranked}
-            fallback_ranked = sorted(
-                fallback_candidates,
-                key=lambda item: (float(item["sort_epoch"]), -int(item["chunk_index"])),
-                reverse=True,
-            )
-            for item in fallback_ranked:
-                if str(item["chunk_id"]) in seen_chunk_ids:
-                    continue
-                ranked.append(item)
-                seen_chunk_ids.add(str(item["chunk_id"]))
-                if len(ranked) >= effective_limit:
-                    break
-
         return [
             {
                 "scope_type": str(item["scope_type"]),
@@ -205,13 +190,20 @@ class RagRetrievalService:
         ]
 
     def _vectorize(self, text: str) -> list[float]:
-        vector = [0.0] * VECTOR_SIZE
-        for token in re.findall(r"[a-z0-9]+", text.lower()):
-            digest = hashlib.sha256(token.encode("utf-8")).digest()
-            bucket = digest[0] % VECTOR_SIZE
-            vector[bucket] += 1.0
-        magnitude = math.sqrt(sum(value * value for value in vector)) or 1.0
-        return [value / magnitude for value in vector]
+        return vectorize_text(text)
+
+    def _query_terms(self, text: str) -> set[str]:
+        return {
+            token
+            for token in re.findall(r"[a-z0-9]+", text.lower())
+            if len(token) >= 4
+        }
+
+    def _keyword_overlap(self, query_terms: set[str], chunk_text: str) -> int:
+        if not query_terms:
+            return 0
+        chunk_terms = self._query_terms(chunk_text)
+        return len(query_terms.intersection(chunk_terms))
 
     def _cosine(self, left: list[float], right: list[float]) -> float:
         if not left or not right or len(left) != len(right):

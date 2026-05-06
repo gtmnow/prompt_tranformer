@@ -139,6 +139,11 @@ class TransformMetadata(BaseModel):
     retrieval_used: bool = False
     retrieval_scope_counts: dict[str, int] = Field(default_factory=dict)
     retrieval_document_count: int = 0
+    retrieval_skipped_reason: Optional[str] = None
+    reference_context_word_count: int = Field(default=0, ge=0)
+    final_prompt_char_count: int = Field(default=0, ge=0)
+    final_prompt_word_count: int = Field(default=0, ge=0)
+    final_response_latency_ms: Optional[float] = Field(default=None, ge=0)
 
 
 class TokenUsageWritePayload(BaseModel):

@@ -1,6 +1,6 @@
 # Prompt Transformer
 
-Prompt Transformer is a FastAPI service that rewrites user prompts using:
+Prompt Transformer is a FastAPI service that rewrites user prompts and, on the chat path, can execute the final model call using:
 
 - a precomputed `final_profile` stored in PostgreSQL
 - deterministic task inference
@@ -8,7 +8,7 @@ Prompt Transformer is a FastAPI service that rewrites user prompts using:
 - optional summary persona overrides
 - optional LLM-assisted structure evaluation for prompt enforcement
 
-The transformed prompt itself is built deterministically. Prompt structure evaluation may optionally use a small LLM evaluator to classify `who`, `task`, `context`, and `output` as `present`, `derived`, or `missing`.
+The transformed prompt itself is built deterministically. Prompt structure evaluation may optionally use a small LLM evaluator to classify `who`, `task`, `context`, and `output` as `present`, `derived`, or `missing`. The chat execution path may also attach tightly budgeted reference context from tenant or user knowledge libraries before the final provider call.
 
 ## MVP scope
 
@@ -36,7 +36,7 @@ Not included:
 app/
   api/         HTTP routes
   core/        config and rule loading
-  db/          session, bootstrap, seeding
+  db/          session
   models/      SQLAlchemy ORM models
   rules/       YAML rule files, including scoring calibration
   schemas/     request/response schemas
@@ -58,7 +58,8 @@ tests/         API tests
 6. Evaluate conversation enforcement plus optional compliance and PII checks
 7. Build the transformed prompt only when the request is allowed to proceed
 8. Optionally log the request and decision result
-9. Return either a transformed prompt, coaching guidance, or a blocked result
+9. For chat execution, optionally retrieve relevance-gated reference context and call the resolved provider
+10. Return either a transformed prompt, coaching guidance, a blocked result, or a final assistant response
 
 See [docs/architecture.md](./docs/architecture.md) for the detailed flow and ownership boundaries.
 
@@ -85,7 +86,7 @@ cp .env.example .env
 alembic upgrade head
 ```
 
-Use the local Alembic flow only for local app-owned development databases. Shared Herman DB environments should be migrated by the canonical `herman-db` migration stream, and `prompt_transformer` should validate the shared revision instead of applying app-local migrations.
+Use the local Alembic flow only for local app-owned development databases. Shared Herman DB environments should be migrated by the canonical `herman-db` migration stream; this service should not own schema migrations or seeding.
 
 4. Seed sample data:
 
@@ -110,6 +111,10 @@ python3 -m app.run_server
 Primary endpoint:
 
 - `POST /api/transform_prompt`
+
+Chat execution endpoint:
+
+- `POST /api/chat/execute`
 
 Score read endpoint:
 
@@ -249,6 +254,16 @@ The scoring model itself is loaded from [app/rules/prompt_scoring.yaml](./app/ru
 
 The top-level `version` in that YAML is the scoring model version of record and is persisted with each conversation score row as `scoring_version`.
 
+## Retrieval and performance guardrails
+
+The chat runtime now applies a few guardrails so knowledge retrieval stays useful instead of bloating every request:
+
+- retrieval only runs for substantive prompts
+- retrieval requires a minimum similarity threshold
+- user documents do not fall back into prompts when relevance is effectively zero
+- reference context is compressed and capped by source count and total word budget before the final provider call
+- timing logs include final prompt size and final response latency
+
 The long-term scoring direction is hybrid:
 
 - heuristics provide the baseline score and fallback behavior
@@ -306,8 +321,6 @@ REQUIRE_SERVICE_AUTH=true
 PROMPT_TRANSFORMER_API_KEY=<shared service credential>
 ALLOWED_CLIENT_IDS=hermanprompt
 ENABLE_REQUEST_LOGGING=false
-RAILWAY_AUTO_MIGRATE=true
-RAILWAY_SEED_ON_START=true
 HOST=0.0.0.0
 ```
 
@@ -316,10 +329,7 @@ Notes:
 - `DATABASE_URL` must be set on the app service, not only on the Postgres service.
 - `DATABASE_URL` should use `postgresql+psycopg://...`, not raw `postgresql://...`.
 - When `REQUIRE_SERVICE_AUTH=true`, callers must send both `Authorization: Bearer <PROMPT_TRANSFORMER_API_KEY>` and an allowed `X-Client-Id`.
-- `RAILWAY_AUTO_MIGRATE=true` runs `alembic upgrade head` only when Herman canonical mode is not active.
-- Shared Herman DB deployments should use the canonical `herman-db` migration stream. In canonical mode, `prompt_transformer` validates the shared revision and does not apply its own Alembic chain.
-- `RAILWAY_SEED_ON_START=true` is useful for the first MVP deploy. After the sample profiles are loaded, switch it to `false`.
-- `railway.json` starts the service through `python3 -m app.run_server`, which bootstraps the database and then launches Uvicorn.
+- Shared Herman DB deployments should use the canonical `herman-db` migration stream. This service does not own schema migration or seed operations; it only starts serving requests.
 
 See [docs/operations.md](./docs/operations.md) for deployment and troubleshooting steps.
 

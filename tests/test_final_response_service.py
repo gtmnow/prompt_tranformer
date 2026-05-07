@@ -111,6 +111,21 @@ class FinalResponseServiceTests(unittest.TestCase):
         self.assertIn({"type": "web_search"}, payload["tools"])
         self.assertEqual(payload["max_output_tokens"], OPENAI_WEB_SEARCH_MIN_OUTPUT_TOKENS)
 
+    def test_build_openai_like_payload_does_not_include_web_search_without_search_prompt(self) -> None:
+        payload = _build_openai_like_payload(
+            profile=_profile(api_family="responses", token_parameter="max_output_tokens"),
+            model="gpt-4.1",
+            conversation_history=[],
+            transformed_prompt="Summarize this product strategy memo for exec review.",
+            image_attachments=[],
+            document_attachments=[],
+            wants_image_generation=False,
+            max_output_tokens=800,
+        )
+
+        self.assertNotIn("tools", payload)
+        self.assertEqual(payload["max_output_tokens"], 800)
+
     def test_build_openai_like_payload_keeps_web_search_available_with_documents(self) -> None:
         payload = _build_openai_like_payload(
             profile=_profile(api_family="responses", token_parameter="max_output_tokens"),

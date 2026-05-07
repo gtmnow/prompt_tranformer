@@ -28,6 +28,23 @@ IMAGE_GENERATION_KEYWORDS = {
     "edit this image",
     "restyle",
 }
+WEB_SEARCH_KEYWORDS = {
+    "search the internet",
+    "search internet",
+    "search the web",
+    "browse the web",
+    "look it up",
+    "look this up",
+    "latest",
+    "today",
+    "current",
+    "recent news",
+    "top news",
+    "news items",
+    "headline",
+    "web search",
+    "online",
+}
 OPENAI_IMAGE_GENERATION_MODELS = {
     "gpt-4.1",
     "gpt-4.1-mini",
@@ -36,7 +53,7 @@ OPENAI_IMAGE_GENERATION_MODELS = {
     "gpt-5",
     "gpt-image-1",
 }
-OPENAI_WEB_SEARCH_MIN_OUTPUT_TOKENS = 1200
+OPENAI_WEB_SEARCH_MIN_OUTPUT_TOKENS = 4000
 
 
 @dataclass(frozen=True)
@@ -162,6 +179,7 @@ def _build_openai_like_payload(
     wants_image_generation: bool,
     max_output_tokens: int,
 ) -> dict[str, Any]:
+    wants_web_search = _wants_web_search(transformed_prompt)
     if profile.api_family == "chat_completions":
         payload: dict[str, Any] = {
             "model": model,
@@ -186,6 +204,7 @@ def _build_openai_like_payload(
             profile=profile,
             document_attachments=document_attachments,
             wants_image_generation=wants_image_generation,
+            wants_web_search=wants_web_search,
             requested_max_output_tokens=max_output_tokens,
         ),
         "store": False,
@@ -201,6 +220,7 @@ def _build_openai_like_payload(
         profile=profile,
         document_attachments=document_attachments,
         wants_image_generation=wants_image_generation,
+        wants_web_search=wants_web_search,
     )
     if tools:
         payload["tools"] = tools
@@ -226,9 +246,10 @@ def _build_tools(
     profile: ResolvedLlmProviderProfile,
     document_attachments: list[AttachmentReference],
     wants_image_generation: bool,
+    wants_web_search: bool,
 ) -> list[dict[str, Any]]:
     tools: list[dict[str, Any]] = []
-    if profile.api_family == "responses":
+    if profile.api_family == "responses" and wants_web_search:
         tools.append({"type": "web_search"})
 
     if document_attachments and _supports_code_interpreter(profile.provider):
@@ -372,6 +393,11 @@ def _wants_image_generation(prompt: str) -> bool:
     return any(keyword in normalized for keyword in IMAGE_GENERATION_KEYWORDS)
 
 
+def _wants_web_search(prompt: str) -> bool:
+    normalized = prompt.casefold()
+    return any(keyword in normalized for keyword in WEB_SEARCH_KEYWORDS)
+
+
 def _supports_openai_image_generation(model: str) -> bool:
     return model.strip().casefold() in OPENAI_IMAGE_GENERATION_MODELS
 
@@ -381,12 +407,14 @@ def _resolve_max_output_tokens(
     profile: ResolvedLlmProviderProfile,
     document_attachments: list[AttachmentReference],
     wants_image_generation: bool,
+    wants_web_search: bool,
     requested_max_output_tokens: int,
 ) -> int:
     tools = _build_tools(
         profile=profile,
         document_attachments=document_attachments,
         wants_image_generation=wants_image_generation,
+        wants_web_search=wants_web_search,
     )
     if profile.provider == "openai" and any(tool.get("type") == "web_search" for tool in tools):
         return max(requested_max_output_tokens, OPENAI_WEB_SEARCH_MIN_OUTPUT_TOKENS)

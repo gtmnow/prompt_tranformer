@@ -151,6 +151,36 @@ class PromptRequirementService:
 
         return updated_conversation, rules_applied, coaching_tip, evaluation_trace, evaluator_usage_entry
 
+    def evaluate_current_prompt(
+        self,
+        *,
+        conversation_id: str,
+        raw_prompt: str,
+        runtime_config: RuntimeLlmConfig | None = None,
+    ) -> tuple[ConversationState, "RequirementEvaluationTrace", Optional[dict[str, object]]]:
+        requirements, _, _, evaluation_trace, evaluator_usage_entry = self._merge_requirements(
+            raw_prompt=raw_prompt,
+            conversation=None,
+            enforcement_level="none",
+            runtime_config=runtime_config,
+        )
+        missing_fields = [
+            field_name
+            for field_name in REQUIREMENT_FIELDS
+            if requirements[field_name].status == "missing"
+        ]
+        conversation = ConversationState(
+            conversation_id=conversation_id,
+            requirements=requirements,
+            enforcement=ConversationEnforcement(
+                level="none",
+                status="passes",
+                missing_fields=missing_fields,
+                last_evaluated_at=datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        return conversation, evaluation_trace, evaluator_usage_entry
+
     def _build_coaching_tip(self, missing_fields: list[str], enforcement_level: str) -> str:
         if missing_fields == ["labeled_structure"]:
             return "Coaching: for full guidance, format the prompt with Who, Task, Context, and Output labels."

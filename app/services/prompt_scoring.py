@@ -33,6 +33,7 @@ class PromptScoreResult:
     llm_dimension_scores: dict[str, int] | None
     scoring_method: str
     score_details: dict[str, object]
+    conversation_scored_requirements: dict[str, ConversationRequirement]
 
     def as_summary(self) -> PromptScoringSummary:
         return PromptScoringSummary(
@@ -81,6 +82,61 @@ class PromptScoringService:
             self.llm_weight = llm_weight / total_weight
 
     def calculate(
+        self,
+        *,
+        conversation: ConversationState,
+        result_type: str,
+        requirement_trace: RequirementEvaluationTrace,
+        submitted_conversation: ConversationState | None = None,
+        submitted_requirement_trace: RequirementEvaluationTrace | None = None,
+    ) -> PromptScoreResult:
+        initial_result = self._calculate_single_prompt_score(
+            conversation=conversation,
+            result_type=result_type,
+            requirement_trace=requirement_trace,
+        )
+        final_result = (
+            self._calculate_single_prompt_score(
+                conversation=submitted_conversation,
+                result_type=result_type,
+                requirement_trace=submitted_requirement_trace,
+            )
+            if result_type == "transformed"
+            and submitted_conversation is not None
+            and submitted_requirement_trace is not None
+            else initial_result
+        )
+        score_details = dict(final_result.score_details)
+        score_details["initial_score"] = initial_result.structural_score
+        score_details["initial_llm_score"] = initial_result.llm_score
+        score_details["raw_requirements"] = {
+            field_name: requirement.model_dump()
+            for field_name, requirement in initial_result.scored_requirements.items()
+        }
+        score_details["submitted_requirements"] = {
+            field_name: requirement.model_dump()
+            for field_name, requirement in final_result.scored_requirements.items()
+        }
+
+        return PromptScoreResult(
+            scoring_version=self.scoring_version,
+            initial_score=initial_result.structural_score,
+            final_score=final_result.structural_score,
+            initial_llm_score=initial_result.llm_score,
+            final_llm_score=final_result.llm_score,
+            structural_score=final_result.structural_score,
+            field_statuses=final_result.field_statuses,
+            field_points=final_result.field_points,
+            scored_requirements=final_result.scored_requirements,
+            heuristic_score=final_result.heuristic_score,
+            llm_score=final_result.llm_score,
+            llm_dimension_scores=final_result.llm_dimension_scores,
+            scoring_method=final_result.scoring_method,
+            score_details=score_details,
+            conversation_scored_requirements=initial_result.scored_requirements,
+        )
+
+    def _calculate_single_prompt_score(
         self,
         *,
         conversation: ConversationState,
@@ -178,6 +234,7 @@ class PromptScoringService:
             llm_dimension_scores=llm_field_points,
             scoring_method="hybrid_llm_v2" if requirement_trace.evaluator_used else "heuristic_only_v1",
             score_details=score_details,
+            conversation_scored_requirements=scored_requirements,
         )
 
     def upsert_conversation_score(
@@ -325,14 +382,14 @@ class PromptScoringService:
                 conversation_started_at=now,
                 last_scored_at=now,
                 enforcement_level=resolved_enforcement_level,
-                initial_score=score_result.structural_score,
-                best_score=score_result.structural_score,
-                final_score=score_result.structural_score,
-                initial_llm_score=score_result.llm_score,
-                best_llm_score=score_result.llm_score,
-                final_llm_score=score_result.llm_score,
-                improvement_score=0,
-                best_improvement_score=0,
+                initial_score=score_result.initial_score,
+                best_score=score_result.final_score,
+                final_score=score_result.final_score,
+                initial_llm_score=score_result.initial_llm_score,
+                best_llm_score=score_result.final_llm_score,
+                final_llm_score=score_result.final_llm_score,
+                improvement_score=score_result.final_score - score_result.initial_score,
+                best_improvement_score=score_result.final_score - score_result.initial_score,
                 passed_without_coaching=result_type == "transformed",
                 reached_policy_complete=resolved_enforcement_status == "passes",
                 coaching_turn_count=1 if result_type == "coaching" else 0,
@@ -350,14 +407,14 @@ class PromptScoringService:
             score_row.task_type = task_type if task_type != "unknown" else score_row.task_type
             score_row.last_scored_at = now
             score_row.enforcement_level = resolved_enforcement_level
-            score_row.final_score = score_result.structural_score
-            score_row.best_score = max(score_row.best_score, score_result.structural_score)
-            score_row.final_llm_score = score_result.llm_score
-            if score_result.llm_score is not None:
+            score_row.final_score = score_result.final_score
+            score_row.best_score = max(score_row.best_score, score_result.final_score)
+            score_row.final_llm_score = score_result.final_llm_score
+            if score_result.final_llm_score is not None:
                 score_row.best_llm_score = (
-                    score_result.llm_score
+                    score_result.final_llm_score
                     if score_row.best_llm_score is None
-                    else max(score_row.best_llm_score, score_result.llm_score)
+                    else max(score_row.best_llm_score, score_result.final_llm_score)
                 )
             score_row.improvement_score = score_row.final_score - score_row.initial_score
             score_row.best_improvement_score = score_row.best_score - score_row.initial_score
@@ -408,6 +465,7 @@ class PromptScoringService:
             llm_dimension_scores=score_result.llm_dimension_scores,
             scoring_method=score_result.scoring_method,
             score_details=score_result.score_details,
+            conversation_scored_requirements=score_result.conversation_scored_requirements,
         )
 
     def enrich_conversation(
@@ -420,7 +478,7 @@ class PromptScoringService:
             update={
                 "requirements": {
                     field_name: requirement.model_copy()
-                    for field_name, requirement in score_result.scored_requirements.items()
+                    for field_name, requirement in score_result.conversation_scored_requirements.items()
                 }
             }
         )

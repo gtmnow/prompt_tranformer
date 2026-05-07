@@ -76,6 +76,9 @@ class ProfileBuilder:
     def _profile_to_payload(profile: TypeDetailProfile) -> dict[str, float | str | bool]:
         payload = {field: float(getattr(profile, field)) for field in PROFILE_FIELDS}
         payload.update({field: getattr(profile, field) for field in CONTROL_FIELDS})
+        payload["prompt_enforcement_level"] = ProfileResolver._normalize_prompt_enforcement_level(
+            str(payload["prompt_enforcement_level"])
+        )
         payload["profile_version"] = profile.profile_version
         return payload
 

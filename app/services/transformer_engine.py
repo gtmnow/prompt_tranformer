@@ -48,6 +48,32 @@ TASK_INSTRUCTION_DEFAULTS = {
 }
 
 
+def _enhance_coaching_tip(
+    coaching_tip: str | None,
+    *,
+    raw_user_text: str,
+    transformer_conversation: dict | None,
+) -> str:
+    if coaching_tip:
+        return coaching_tip
+
+    missing_fields = []
+    if transformer_conversation is not None:
+        enforcement = transformer_conversation.get("enforcement") or {}
+        raw_missing_fields = enforcement.get("missing_fields") or []
+        if isinstance(raw_missing_fields, list):
+            missing_fields = [str(field).strip() for field in raw_missing_fields if str(field).strip()]
+
+    if missing_fields:
+        return f"Coaching: add {', '.join(missing_fields)} before retrying."
+
+    prompt_preview = raw_user_text.strip()
+    if prompt_preview:
+        return f'Coaching: revise "{prompt_preview}" with clearer structure before retrying.'
+
+    return "Coaching: revise the prompt with clearer structure before retrying."
+
+
 class TransformerEngine:
     def __init__(self, db_session: Session):
         self.db_session = db_session
@@ -136,6 +162,10 @@ class TransformerEngine:
             result_type = "transformed"
             blocking_message = None
 
+            submitted_conversation = None
+            submitted_requirement_trace = None
+            submitted_evaluator_usage_entry = None
+
             step_started_at = time.perf_counter()
             if blocking_findings:
                 result_type = "blocked"
@@ -153,6 +183,15 @@ class TransformerEngine:
                     task_type=task_type,
                     persona=persona.values,
                     model_policy=policy.policy,
+                )
+                (
+                    submitted_conversation,
+                    submitted_requirement_trace,
+                    submitted_evaluator_usage_entry,
+                ) = self.prompt_requirements.evaluate_current_prompt(
+                    conversation_id=payload.conversation_id,
+                    raw_prompt=transformed_prompt,
+                    runtime_config=runtime_llm if runtime_llm.scoring_enabled else None,
                 )
             timings_ms["prompt_build"] = (time.perf_counter() - step_started_at) * 1000
 
@@ -182,6 +221,8 @@ class TransformerEngine:
                 conversation=conversation,
                 result_type=result_type,
                 requirement_trace=requirement_trace,
+                submitted_conversation=submitted_conversation,
+                submitted_requirement_trace=submitted_requirement_trace,
             )
             score_summary = self.prompt_scoring.upsert_conversation_score(
                 conversation=conversation,
@@ -218,7 +259,10 @@ class TransformerEngine:
                     "conversation_json": conversation.model_dump(),
                     "findings_json": [finding.model_dump() for finding in findings],
                     "metadata_json": metadata.model_dump(),
-                    "token_usage_json": merge_usage(None, evaluator_usage_entry),
+                    "token_usage_json": merge_usage(
+                        merge_usage(None, evaluator_usage_entry),
+                        submitted_evaluator_usage_entry,
+                    ),
                 }
             )
             request_log_id = request_row.id
@@ -280,12 +324,16 @@ class TransformerEngine:
         )
 
     def execute_chat(self, payload: ExecuteChatRequest) -> ExecuteChatResponse:
+        runtime_llm_error: RuntimeLlmConfigError | None = None
         try:
             runtime_llm = self.runtime_llm.resolve(payload.user_id_hash)
         except RuntimeLlmConfigError as exc:
-            raise ValueError(str(exc)) from exc
+            runtime_llm = None
+            runtime_llm_error = exc
 
-        if not payload.transform_enabled or not runtime_llm.transformation_enabled:
+        if not payload.transform_enabled or (runtime_llm is not None and not runtime_llm.transformation_enabled):
+            if runtime_llm_error is not None or runtime_llm is None:
+                raise ValueError(str(runtime_llm_error)) from runtime_llm_error
             bypass_reason = (
                 "tenant_transformation_disabled"
                 if not runtime_llm.transformation_enabled
@@ -399,6 +447,9 @@ class TransformerEngine:
                 scoring=transform_response.scoring,
                 metadata=transform_response.metadata,
             )
+
+        if runtime_llm_error is not None or runtime_llm is None:
+            raise ValueError(str(runtime_llm_error)) from runtime_llm_error
 
         reference_context = self._build_reference_context(runtime_llm.tenant_id, payload, transform_response)
         self._populate_final_prompt_metadata(

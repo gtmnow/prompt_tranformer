@@ -17,7 +17,7 @@ from app.services.guide_me_generation import GuideMeGenerationResult
 from app.services.rag_retrieval_service import RagRetrievalResult
 from app.services.rag_vectorizer import vectorize_text
 from app.services.llm_types import NormalizedTokenUsage
-from app.services.runtime_llm import RuntimeLlmConfig
+from app.services.runtime_llm import RuntimeLlmConfig, RuntimeLlmConfigError
 
 
 AUTH_HEADERS = {
@@ -583,6 +583,83 @@ def test_execute_chat_returns_504_when_final_response_provider_times_out(client)
 
     assert response.status_code == 504
     assert response.json()["detail"] == "LLM provider timed out after 45 seconds."
+
+
+def test_execute_chat_returns_coaching_without_runtime_llm_when_enforcement_short_circuits(client) -> None:
+    _seed_final_profiles(client)
+    _update_profile(client, "user_1", prompt_enforcement_level="full")
+
+    with (
+        patch(
+            "app.services.transformer_engine.RuntimeLlmResolver.resolve",
+            side_effect=RuntimeLlmConfigError("No tenant assignment found for user"),
+        ),
+        patch(
+            "app.services.transformer_engine.FinalResponseService.generate",
+            side_effect=AssertionError("final response generation should not run for coaching"),
+        ),
+    ):
+        response = client.post(
+            "/api/chat/execute",
+            headers=AUTH_HEADERS,
+            json={
+                "session_id": "sess_execute_coaching_no_runtime",
+                "conversation_id": "conv_execute_coaching_no_runtime",
+                "user_id_hash": "user_1",
+                "raw_prompt": "Explain how this works",
+                "target_llm": {"provider": "openai", "model": "gpt-4.1"},
+                "conversation_history": [],
+                "attachments": [],
+                "transform_enabled": True,
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["result_type"] == "coaching"
+    assert body["conversation"]["enforcement"]["status"] == "needs_coaching"
+    assert body["assistant_text"]
+
+
+def test_execute_chat_returns_blocked_without_runtime_llm_when_pii_short_circuits(client) -> None:
+    _seed_final_profiles(client)
+    _update_profile(
+        client,
+        "user_1",
+        prompt_enforcement_level="none",
+        pii_check_enabled=True,
+    )
+
+    with (
+        patch(
+            "app.services.transformer_engine.RuntimeLlmResolver.resolve",
+            side_effect=RuntimeLlmConfigError("No tenant assignment found for user"),
+        ),
+        patch(
+            "app.services.transformer_engine.FinalResponseService.generate",
+            side_effect=AssertionError("final response generation should not run for blocked prompts"),
+        ),
+    ):
+        response = client.post(
+            "/api/chat/execute",
+            headers=AUTH_HEADERS,
+            json={
+                "session_id": "sess_execute_blocked_no_runtime",
+                "conversation_id": "conv_execute_blocked_no_runtime",
+                "user_id_hash": "user_1",
+                "raw_prompt": "Write an email for alice@example.com and bob@example.com about our offer.",
+                "target_llm": {"provider": "openai", "model": "gpt-4.1"},
+                "conversation_history": [],
+                "attachments": [],
+                "transform_enabled": True,
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["result_type"] == "blocked"
+    assert body["conversation"]["enforcement"]["status"] == "blocked"
+    assert body["blocking_message"]
 
 
 def test_user_scope_retrieval_skips_unrelated_chunks_when_query_has_no_overlap(client) -> None:
@@ -1257,6 +1334,29 @@ def test_transform_returns_coaching_when_full_enforcement_missing_fields(client)
     assert body["coaching_tip"].startswith("Coaching:")
     assert body["conversation"]["enforcement"]["status"] == "needs_coaching"
     assert "who" in body["conversation"]["enforcement"]["missing_fields"]
+
+
+def test_transform_normalizes_capitalized_profile_enforcement_level(client) -> None:
+    _seed_final_profiles(client)
+    _update_profile(client, "user_1", prompt_enforcement_level="Full")
+
+    response = client.post(
+        "/api/transform_prompt",
+        headers=AUTH_HEADERS,
+        json={
+            "session_id": "sess_capitalized_full",
+            "conversation_id": "conv_capitalized_full",
+            "user_id_hash": "user_1",
+            "raw_prompt": "Explain how this works",
+            "target_llm": {"provider": "openai", "model": "gpt-4.1"},
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["result_type"] == "coaching"
+    assert body["conversation"]["enforcement"]["level"] == "full"
+    assert body["conversation"]["enforcement"]["status"] == "needs_coaching"
 
 
 def test_transform_allows_demo_enforcement_override(client) -> None:
@@ -2056,6 +2156,68 @@ def test_conversation_memory_does_not_inflate_current_turn_score(client) -> None
         assert score_row.initial_score == 30
         assert score_row.final_score == 80
         assert score_row.best_score == 80
+    finally:
+        db.close()
+
+
+def test_single_transformed_prompt_scores_raw_and_submitted_versions_separately(client) -> None:
+    _seed_final_profiles(client)
+
+    from app.services.structure_evaluator import StructureEvaluationService
+
+    def fake_evaluate(self, **kwargs):
+        prompt = kwargs["raw_prompt"]
+        if prompt == "tell me a joke":
+            return {
+                "who": {"value": None, "status": "missing", "score": 0},
+                "task": {"value": "tell me a joke", "status": "present", "score": 25},
+                "context": {"value": None, "status": "missing", "score": 0},
+                "output": {"value": "joke in the chat", "status": "derived", "score": 5},
+                "coaching_tip": None,
+            }
+        return {
+            "who": {"value": "assistant", "status": "present", "score": 25},
+            "task": {"value": "tell me a joke", "status": "present", "score": 25},
+            "context": {"value": "general request guidance", "status": "present", "score": 25},
+            "output": {"value": "respond directly with concise detail", "status": "present", "score": 25},
+            "coaching_tip": None,
+        }
+
+    with patch.object(StructureEvaluationService, "is_enabled", return_value=True), patch.object(
+        StructureEvaluationService,
+        "evaluate",
+        fake_evaluate,
+    ):
+        response = client.post(
+            "/api/transform_prompt",
+            headers=AUTH_HEADERS,
+            json={
+                "session_id": "sess_single_turn_submitted_score",
+                "conversation_id": "conv_single_turn_submitted_score",
+                "user_id_hash": "user_1",
+                "raw_prompt": "tell me a joke",
+                "target_llm": {"provider": "openai", "model": "gpt-4.1"},
+                "enforcement_level": "none",
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["result_type"] == "transformed"
+    assert body["scoring"]["initial_score"] == 30
+    assert body["scoring"]["initial_llm_score"] == 30
+    assert body["scoring"]["final_score"] > body["scoring"]["initial_score"]
+    assert body["scoring"]["structural_score"] == body["scoring"]["final_score"]
+    assert body["scoring"]["final_llm_score"] > body["scoring"]["initial_llm_score"]
+
+    db = next(client.app.dependency_overrides[get_db]())
+    try:
+        score_row = db.query(ConversationPromptScore).filter_by(
+            conversation_id="conv_single_turn_submitted_score"
+        ).one()
+        assert score_row.initial_score == body["scoring"]["initial_score"]
+        assert score_row.final_score == body["scoring"]["final_score"]
+        assert score_row.improvement_score == score_row.final_score - score_row.initial_score
     finally:
         db.close()
 

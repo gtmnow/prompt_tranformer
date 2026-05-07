@@ -56,7 +56,7 @@ class ProfileResolver:
                 values={field: float(getattr(db_profile, field)) for field in PROFILE_FIELDS},
                 source="db_profile",
                 profile_version=db_profile.profile_version,
-                prompt_enforcement_level=db_profile.prompt_enforcement_level,
+                prompt_enforcement_level=self._normalize_prompt_enforcement_level(db_profile.prompt_enforcement_level),
                 compliance_check_enabled=bool(db_profile.compliance_check_enabled),
                 pii_check_enabled=bool(db_profile.pii_check_enabled),
             )
@@ -121,3 +121,10 @@ class ProfileResolver:
             compliance_check_enabled=False,
             pii_check_enabled=False,
         )
+
+    @staticmethod
+    def _normalize_prompt_enforcement_level(value: str | None) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized in {"none", "low", "moderate", "full"}:
+            return normalized
+        return "none"

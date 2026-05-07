@@ -20,7 +20,7 @@ class ConversationScoreService:
             raise ValueError("Conversation score not found.")
 
         score_details = score_row.score_details_json or {}
-        raw_requirements = score_details.get("requirements", {})
+        raw_requirements = score_details.get("raw_requirements", score_details.get("requirements", {}))
         conversation = None
         if isinstance(raw_requirements, dict):
             requirements = {}

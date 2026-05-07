@@ -188,11 +188,13 @@ def _build_openai_like_payload(
     if not wants_image_generation:
         payload["text"] = {"format": {"type": "text"}}
 
-    tools = _build_tools(document_attachments=document_attachments, wants_image_generation=wants_image_generation)
+    tools = _build_tools(
+        profile=profile,
+        document_attachments=document_attachments,
+        wants_image_generation=wants_image_generation,
+    )
     if tools:
         payload["tools"] = tools
-        if document_attachments and not wants_image_generation:
-            payload["tool_choice"] = {"type": "code_interpreter"}
 
     return payload
 
@@ -212,11 +214,15 @@ def _build_messages(
 
 def _build_tools(
     *,
+    profile: ResolvedLlmProviderProfile,
     document_attachments: list[AttachmentReference],
     wants_image_generation: bool,
 ) -> list[dict[str, Any]]:
     tools: list[dict[str, Any]] = []
-    if document_attachments:
+    if profile.api_family == "responses":
+        tools.append({"type": "web_search"})
+
+    if document_attachments and _supports_code_interpreter(profile.provider):
         tools.append(
             {
                 "type": "code_interpreter",
@@ -231,7 +237,7 @@ def _build_tools(
             }
         )
 
-    if wants_image_generation:
+    if wants_image_generation and _supports_image_generation_tool(profile.provider):
         tools.append({"type": "image_generation", "quality": "high"})
 
     return tools
@@ -342,6 +348,14 @@ def _wants_image_generation(prompt: str) -> bool:
 
 def _supports_openai_image_generation(model: str) -> bool:
     return model.strip().casefold() in OPENAI_IMAGE_GENERATION_MODELS
+
+
+def _supports_code_interpreter(provider: str) -> bool:
+    return provider.strip().casefold() in {"openai", "azure_openai"}
+
+
+def _supports_image_generation_tool(provider: str) -> bool:
+    return provider.strip().casefold() in {"openai", "azure_openai"}
 
 
 def _supports_temperature_parameter(model: str) -> bool:

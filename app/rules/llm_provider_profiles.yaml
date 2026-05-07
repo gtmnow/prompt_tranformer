@@ -31,15 +31,15 @@ providers:
 
   xai:
     default_model: grok-3
-    api_family: chat_completions
-    endpoint_path: /chat/completions
+    api_family: responses
+    endpoint_path: /responses
     auth_scheme: bearer
-    json_mode: response_format_json_object
-    token_parameter: max_completion_tokens
+    json_mode: prompt_only
+    token_parameter: max_output_tokens
     models:
       grok-3:
-        api_family: chat_completions
-        token_parameter: max_completion_tokens
+        api_family: responses
+        token_parameter: max_output_tokens
 
   azure_openai:
     default_model: gpt-4.1

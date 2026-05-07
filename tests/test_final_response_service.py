@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from app.schemas.transform import ConversationHistoryTurn
+from app.schemas.transform import AttachmentReference, ConversationHistoryTurn
 from app.services.final_response_service import _build_openai_like_payload, _extract_output_text
 from app.services.rag_prompt_assembly_service import RagPromptAssemblyService
 from app.services.llm_provider_profiles import ResolvedLlmProviderProfile
@@ -89,6 +89,85 @@ class FinalResponseServiceTests(unittest.TestCase):
             )
 
         self.assertEqual(payload["max_completion_tokens"], 512)
+
+    def test_build_openai_like_payload_includes_web_search_for_responses(self) -> None:
+        payload = _build_openai_like_payload(
+            profile=_profile(api_family="responses", token_parameter="max_output_tokens"),
+            model="gpt-4.1",
+            conversation_history=[],
+            transformed_prompt="Find the latest product announcement.",
+            image_attachments=[],
+            document_attachments=[],
+            wants_image_generation=False,
+            max_output_tokens=800,
+        )
+
+        self.assertIn("tools", payload)
+        self.assertIn({"type": "web_search"}, payload["tools"])
+
+    def test_build_openai_like_payload_keeps_web_search_available_with_documents(self) -> None:
+        payload = _build_openai_like_payload(
+            profile=_profile(api_family="responses", token_parameter="max_output_tokens"),
+            model="gpt-4.1",
+            conversation_history=[],
+            transformed_prompt="Compare this document against the latest public guidance.",
+            image_attachments=[],
+            document_attachments=[
+                AttachmentReference(
+                    id="doc_1",
+                    kind="document",
+                    name="brief.pdf",
+                    provider_file_id="file_123",
+                )
+            ],
+            wants_image_generation=False,
+            max_output_tokens=800,
+        )
+
+        self.assertIn("tools", payload)
+        self.assertIn({"type": "web_search"}, payload["tools"])
+        self.assertEqual(payload["tools"][1]["type"], "code_interpreter")
+        self.assertNotIn("tool_choice", payload)
+
+    def test_build_openai_like_payload_xai_responses_uses_web_search_without_openai_only_tools(self) -> None:
+        xai_profile = ResolvedLlmProviderProfile(
+            provider="xai",
+            requested_model="grok-3-mini",
+            resolved_model="grok-3-mini",
+            api_family="responses",
+            endpoint_path="/responses",
+            auth_scheme="bearer",
+            auth_header_name=None,
+            version_header_name=None,
+            version_header_value=None,
+            json_mode="prompt_only",
+            token_parameter="max_output_tokens",
+            supports_system_prompt=True,
+            request_timeout_seconds=15.0,
+            raw={},
+        )
+
+        payload = _build_openai_like_payload(
+            profile=xai_profile,
+            model="grok-3-mini",
+            conversation_history=[],
+            transformed_prompt="Find the latest hiring trends.",
+            image_attachments=[],
+            document_attachments=[
+                AttachmentReference(
+                    id="doc_1",
+                    kind="document",
+                    name="brief.pdf",
+                    provider_file_id="file_123",
+                )
+            ],
+            wants_image_generation=False,
+            max_output_tokens=800,
+        )
+
+        self.assertEqual(payload["tools"], [{"type": "web_search"}])
+        self.assertIn("input", payload)
+        self.assertNotIn("messages", payload)
 
     def test_rag_prompt_assembly_compresses_and_budgets_reference_context(self) -> None:
         service = RagPromptAssemblyService()

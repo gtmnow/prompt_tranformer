@@ -501,11 +501,10 @@ def test_execute_chat_keeps_runtime_xai_model_and_reports_retrieval_metadata(cli
         mock_client = httpx_client.return_value.__enter__.return_value
         mock_client.post.return_value.status_code = 200
         mock_client.post.return_value.json.return_value = {
-            "choices": [
+            "output": [
                 {
-                    "message": {
-                        "content": "Here is the xAI response.",
-                    }
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": "Here is the xAI response."}],
                 }
             ]
         }
@@ -537,6 +536,9 @@ def test_execute_chat_keeps_runtime_xai_model_and_reports_retrieval_metadata(cli
 
     request_json = mock_client.post.call_args.kwargs["json"]
     assert request_json["model"] == "grok-3-mini"
+    assert "input" in request_json
+    assert "messages" not in request_json
+    assert request_json["tools"] == [{"type": "web_search"}]
 
 
 def test_execute_chat_returns_504_when_final_response_provider_times_out(client) -> None:
@@ -922,11 +924,15 @@ def test_execute_chat_continues_when_retrieval_event_logging_fails(client) -> No
         mock_client = httpx_client.return_value.__enter__.return_value
         mock_client.post.return_value.status_code = 200
         mock_client.post.return_value.json.return_value = {
-            "choices": [
+            "output": [
                 {
-                    "message": {
-                        "content": "Your background best fits GTM, lifecycle, and product marketing roles.",
-                    }
+                    "type": "message",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": "Your background best fits GTM, lifecycle, and product marketing roles.",
+                        }
+                    ],
                 }
             ]
         }
@@ -1018,11 +1024,10 @@ def test_execute_chat_reports_user_context_disabled_reason_when_personal_toggle_
         mock_client = httpx_client.return_value.__enter__.return_value
         mock_client.post.return_value.status_code = 200
         mock_client.post.return_value.json.return_value = {
-            "choices": [
+            "output": [
                 {
-                    "message": {
-                        "content": "Here is a general answer.",
-                    }
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": "Here is a general answer."}],
                 }
             ]
         }

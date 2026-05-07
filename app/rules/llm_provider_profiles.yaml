@@ -9,12 +9,13 @@ default:
 
 providers:
   openai:
-    default_model: gpt-4.1
+    default_model: gpt-5.4-mini
     api_family: responses
     endpoint_path: /responses
     auth_scheme: bearer
     json_mode: prompt_only
     token_parameter: max_output_tokens
+    supports_web_search: true
     models:
       gpt-4.1:
         api_family: responses
@@ -25,46 +26,61 @@ providers:
       gpt-5.4:
         api_family: responses
         token_parameter: max_output_tokens
+        supports_web_search: true
       gpt-5.4-mini:
         api_family: responses
         token_parameter: max_output_tokens
+        supports_web_search: true
 
   xai:
-    default_model: grok-3
+    default_model: grok-4-1-fast-reasoning
     api_family: responses
     endpoint_path: /responses
     auth_scheme: bearer
     json_mode: prompt_only
     token_parameter: max_output_tokens
+    supports_web_search: false
     models:
-      grok-3:
+      grok-4-1:
         api_family: responses
         token_parameter: max_output_tokens
+      grok-4-1-fast:
+        api_family: responses
+        token_parameter: max_output_tokens
+      grok-4-1-fast-reasoning:
+        api_family: responses
+        token_parameter: max_output_tokens
+        supports_web_search: true
 
   azure_openai:
-    default_model: gpt-4.1
+    default_model: gpt-5.4-mini
     api_family: responses
     endpoint_path: /responses
     auth_scheme: api_key
     auth_header_name: api-key
     json_mode: prompt_only
     token_parameter: max_output_tokens
+    supports_web_search: true
     models:
       gpt-4.1:
         api_family: responses
         token_parameter: max_output_tokens
+        supports_web_search: true
       gpt-4.1-mini:
         api_family: responses
         token_parameter: max_output_tokens
+        supports_web_search: true
       gpt-5.4:
         api_family: responses
         token_parameter: max_output_tokens
+        supports_web_search: true
       gpt-5.4-mini:
         api_family: responses
         token_parameter: max_output_tokens
+        supports_web_search: true
 
   anthropic:
-    default_model: claude-3-5-sonnet
+    default_model: claude-haiku-4-5
     api_family: messages
     endpoint_path: /messages
     auth_scheme: anthropic
@@ -73,7 +89,11 @@ providers:
     version_header_value: "2023-06-01"
     json_mode: prompt_only
     token_parameter: max_tokens
+    supports_web_search: false
     models:
+      claude-haiku-4-5:
+        api_family: messages
+        token_parameter: max_tokens
       claude-3-5-sonnet:
         api_family: messages
         token_parameter: max_tokens

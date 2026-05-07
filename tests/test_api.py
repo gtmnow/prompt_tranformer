@@ -535,7 +535,7 @@ def test_execute_chat_keeps_runtime_xai_model_and_reports_retrieval_metadata(cli
     assert body["metadata"]["retrieval_document_count"] == 1
 
     request_json = mock_client.post.call_args.kwargs["json"]
-    assert request_json["model"] == "grok-3-mini"
+    assert request_json["model"] == "grok-4-1-fast-reasoning"
     assert "input" in request_json
     assert "messages" not in request_json
     assert "tools" not in request_json

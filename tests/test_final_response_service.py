@@ -18,7 +18,14 @@ from app.services.rag_prompt_assembly_service import RagPromptAssemblyService
 from app.services.runtime_llm import RuntimeLlmConfig
 
 
-def _profile(*, provider: str = "openai", api_family: str, token_parameter: str) -> ResolvedLlmProviderProfile:
+def _profile(
+    *,
+    provider: str = "openai",
+    api_family: str,
+    token_parameter: str,
+    supports_web_search: bool = False,
+    raw: dict | None = None,
+) -> ResolvedLlmProviderProfile:
     return ResolvedLlmProviderProfile(
         provider=provider,
         requested_model="test-model",
@@ -33,7 +40,8 @@ def _profile(*, provider: str = "openai", api_family: str, token_parameter: str)
         token_parameter=token_parameter,
         supports_system_prompt=True,
         request_timeout_seconds=15.0,
-        raw={},
+        supports_web_search=supports_web_search,
+        raw=raw or {},
     )
 
 
@@ -53,7 +61,7 @@ def _runtime_config(*, provider: str = "openai", model: str = "gpt-4.1") -> Runt
 
 
 class FinalResponseServiceTests(unittest.TestCase):
-    def test_provider_profiles_preserve_requested_unknown_model(self) -> None:
+    def test_provider_profiles_preserve_supported_model(self) -> None:
         profile = LlmProviderProfileService().resolve("xai", "grok-4-1")
 
         self.assertEqual(profile.requested_model, "grok-4-1")
@@ -133,7 +141,12 @@ class FinalResponseServiceTests(unittest.TestCase):
         from app.services.final_response_service import FinalResponseService
 
         service = FinalResponseService()
-        profile = _profile(provider="openai", api_family="responses", token_parameter="max_output_tokens")
+        profile = _profile(
+            provider="openai",
+            api_family="responses",
+            token_parameter="max_output_tokens",
+            supports_web_search=True,
+        )
 
         with patch.object(service.provider_profiles, "resolve", return_value=profile):
             request = service._build_request(
@@ -142,6 +155,7 @@ class FinalResponseServiceTests(unittest.TestCase):
                 conversation_history=[],
                 attachments=[],
                 intent=FinalResponseIntent(use_web_search=True, use_image_generation=False),
+                profile=profile,
             )
 
         self.assertEqual(request.model, "test-model")
@@ -154,11 +168,16 @@ class FinalResponseServiceTests(unittest.TestCase):
         from app.services.final_response_service import FinalResponseService
 
         service = FinalResponseService()
-        profile = _profile(provider="xai", api_family="responses", token_parameter="max_output_tokens")
+        profile = _profile(
+            provider="xai",
+            api_family="responses",
+            token_parameter="max_output_tokens",
+            supports_web_search=False,
+        )
 
         with patch.object(service.provider_profiles, "resolve", return_value=profile):
             request = service._build_request(
-                runtime_config=_runtime_config(provider="xai", model="grok-3-mini"),
+                runtime_config=_runtime_config(provider="xai", model="grok-4-1"),
                 transformed_prompt="Find the latest hiring trends.",
                 conversation_history=[],
                 attachments=[
@@ -170,9 +189,62 @@ class FinalResponseServiceTests(unittest.TestCase):
                     )
                 ],
                 intent=FinalResponseIntent(use_web_search=True, use_image_generation=False),
+                profile=profile,
+            )
+        self.assertEqual(request.tools, [])
+        self.assertTrue(request.input_items)
+        self.assertFalse(request.conversation_messages)
+
+    def test_generate_raises_for_unsupported_web_search_model(self) -> None:
+        from app.services.final_response_service import FinalResponseService
+
+        service = FinalResponseService()
+        unsupported_profile = _profile(
+            provider="xai",
+            api_family="responses",
+            token_parameter="max_output_tokens",
+            supports_web_search=False,
+        )
+
+        with patch.object(
+            service.provider_profiles,
+            "resolve",
+            return_value=unsupported_profile,
+        ):
+            with self.assertRaises(ValueError) as exc_info:
+                service.generate(
+                    runtime_config=_runtime_config(provider="xai", model="grok-4-1"),
+                    transformed_prompt="Find the latest hiring trends.",
+                    conversation_history=[],
+                    attachments=[],
+                    intent=FinalResponseIntent(use_web_search=True, use_image_generation=False),
+                )
+            self.assertIn("does not support live web retrievals", str(exc_info.exception))
+
+        profile = _profile(
+            provider="xai",
+            api_family="responses",
+            token_parameter="max_output_tokens",
+            supports_web_search=True,
+        )
+        with patch.object(service.provider_profiles, "resolve", return_value=profile):
+            request = service._build_request(
+                runtime_config=_runtime_config(provider="xai", model="grok-4-1"),
+                transformed_prompt="Find the latest hiring trends.",
+                conversation_history=[],
+                attachments=[
+                    AttachmentReference(
+                        id="doc_1",
+                        kind="document",
+                        name="brief.pdf",
+                        provider_file_id="file_123",
+                    )
+                ],
+                intent=FinalResponseIntent(use_web_search=False, use_image_generation=False),
+                profile=profile,
             )
 
-        self.assertEqual(request.tools, [{"type": "web_search"}])
+        self.assertEqual(request.tools, [])
         self.assertTrue(request.input_items)
         self.assertFalse(request.conversation_messages)
 

@@ -8,7 +8,7 @@ default:
 
 providers:
   openai:
-    default_model: gpt-4.1
+    default_model: gpt-5.4-mini
     models:
       gpt-4.1:
         structure_preference: high
@@ -25,18 +25,38 @@ providers:
         format_strictness: high
         verbosity: medium
         stepwise: helpful
+      gpt-5.4-mini:
+        structure_preference: high
+        format_strictness: high
+        verbosity: medium
+        stepwise: helpful
   anthropic:
-    default_model: claude-3-5-sonnet
+    default_model: claude-haiku-4-5
     models:
+      claude-haiku-4-5:
+        structure_preference: high
+        format_strictness: high
+        verbosity: medium
+        stepwise: helpful
       claude-3-5-sonnet:
         structure_preference: medium
         format_strictness: medium
         verbosity: high
         stepwise: helpful
   xai:
-    default_model: grok-3
+    default_model: grok-4-1-fast-reasoning
     models:
-      grok-3:
+      grok-4-1:
+        structure_preference: medium
+        format_strictness: medium
+        verbosity: medium
+        stepwise: helpful
+      grok-4-1-fast:
+        structure_preference: medium
+        format_strictness: medium
+        verbosity: medium
+        stepwise: helpful
+      grok-4-1-fast-reasoning:
         structure_preference: medium
         format_strictness: medium
         verbosity: medium

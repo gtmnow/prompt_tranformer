@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any
 
@@ -10,6 +11,8 @@ from app.services.llm_provider_profiles import LlmProviderProfileService, Resolv
 from app.services.llm_types import TransformerLlmError, TransformerLlmRequest, TransformerLlmResponse
 from app.services.runtime_llm import RuntimeLlmConfig
 
+
+logger = logging.getLogger("prompt_transformer.final_response_service")
 
 DOCUMENT_KINDS = {"document"}
 IMAGE_KINDS = {"image"}
@@ -103,26 +106,35 @@ class FinalResponseService:
         reference_context: str | None = None,
     ) -> FinalResponseResult:
         final_prompt = transformed_prompt if not reference_context else f"{reference_context}\n\n{transformed_prompt}"
-        provider = runtime_config.provider.strip().casefold()
-        if provider not in {"openai", "xai", "azure_openai"}:
-            raise ValueError(f"Final response generation is not implemented for provider: {runtime_config.provider}")
+        profile = self.provider_profiles.resolve(runtime_config.provider, runtime_config.model)
 
         effective_intent = intent or resolve_final_response_intent(
             raw_prompt=transformed_prompt,
             transformed_prompt=transformed_prompt,
+            supports_web_search=profile.supports_web_search,
         )
+        if effective_intent.use_web_search and not _supports_web_search(profile):
+            logger.warning(
+                "Model %s for provider %s does not support web retrieval",
+                profile.resolved_model,
+                profile.provider,
+            )
+            raise ValueError(
+                f"Model '{profile.resolved_model}' does not support live web retrievals."
+            )
         request = self._build_request(
             runtime_config=runtime_config,
             transformed_prompt=final_prompt,
             conversation_history=conversation_history,
             attachments=attachments,
             intent=effective_intent,
+            profile=profile,
         )
 
         response, error = self.gateway.invoke(request)
         if error is not None:
             raise FinalResponseProviderError(
-                _build_gateway_error_message(error, profile=self.provider_profiles.resolve(runtime_config.provider, runtime_config.model)),
+                _build_gateway_error_message(error, profile=profile),
                 status_code=_map_gateway_error_status_code(error),
             )
         if response is None:
@@ -150,10 +162,10 @@ class FinalResponseService:
         conversation_history: list[ConversationHistoryTurn],
         attachments: list[AttachmentReference],
         intent: FinalResponseIntent,
+        profile: ResolvedLlmProviderProfile,
     ) -> TransformerLlmRequest:
         document_attachments = [attachment for attachment in attachments if attachment.kind in DOCUMENT_KINDS]
         image_attachments = [attachment for attachment in attachments if attachment.kind in IMAGE_KINDS]
-        profile = self.provider_profiles.resolve(runtime_config.provider, runtime_config.model)
         resolved_model = profile.resolved_model
 
         if intent.use_image_generation and not _supports_openai_image_generation(resolved_model):
@@ -206,11 +218,15 @@ def resolve_final_response_intent(
     *,
     raw_prompt: str,
     transformed_prompt: str | None = None,
+    supports_web_search: bool = True,
 ) -> FinalResponseIntent:
     transformed = transformed_prompt or ""
     combined = "\n".join(part for part in [raw_prompt, transformed] if part.strip())
     return FinalResponseIntent(
-        use_web_search=_should_use_web_search(raw_prompt=raw_prompt, transformed_prompt=combined),
+        use_web_search=(
+            supports_web_search
+            and _should_use_web_search(raw_prompt=raw_prompt, transformed_prompt=combined)
+        ),
         use_image_generation=_wants_image_generation(combined),
     )
 
@@ -254,7 +270,7 @@ def _build_tools(
     use_web_search: bool,
 ) -> list[dict[str, Any]]:
     tools: list[dict[str, Any]] = []
-    if profile.api_family == "responses" and use_web_search:
+    if _supports_web_search(profile) and use_web_search:
         tools.append({"type": "web_search"})
 
     if document_attachments and _supports_code_interpreter(profile.provider):
@@ -362,6 +378,10 @@ def _wants_image_generation(prompt: str) -> bool:
 
 def _supports_openai_image_generation(model: str) -> bool:
     return model.strip().casefold() in OPENAI_IMAGE_GENERATION_MODELS
+
+
+def _supports_web_search(profile: ResolvedLlmProviderProfile) -> bool:
+    return profile.api_family == "responses" and bool(profile.supports_web_search)
 
 
 def _resolve_max_output_tokens(

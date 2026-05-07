@@ -28,6 +28,7 @@ from app.schemas.transform import (
 from app.services.profile_resolver import ProfileResolver
 from app.services.conversation_scores import ConversationScoreService
 from app.services.final_response_service import FinalResponseProviderError
+from app.services.guide_me_generation import GuideMeGenerationError
 from app.services.llm_types import NormalizedTokenUsage
 from app.services.rag_ingestion_service import RagIngestionService
 from app.services.rag_limit_resolver import RagLimitResolver
@@ -177,6 +178,11 @@ def generate_guide_me_helper(
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except GuideMeGenerationError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
             detail=str(exc),
         ) from exc
     except OperationalError as exc:

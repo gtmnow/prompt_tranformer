@@ -72,7 +72,7 @@ curl -X POST "https://<service-domain>/api/transform_prompt" \
   -d '{
     "session_id": "sess_123",
     "conversation_id": "conv_123",
-    "user_id": "user_1",
+    "user_id_hash": "user_1",
     "raw_prompt": "Explain this concept simply",
     "target_llm": {
       "provider": "openai",

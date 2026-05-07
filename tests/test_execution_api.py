@@ -1,6 +1,7 @@
 from unittest.mock import patch
 
 from app.schemas.transform import ExecuteChatResponse, GuideMeHelperResponse, TransformMetadata
+from app.services.guide_me_generation import GuideMeGenerationError
 
 
 AUTH_HEADERS = {
@@ -88,3 +89,21 @@ def test_guide_me_helper_route_returns_structured_payload(client) -> None:
     body = response.json()
     assert body["helper_kind"] == "answer_extraction"
     assert body["payload"]["task"] == "Reduce unqualified applicants by 30%."
+
+
+def test_guide_me_helper_route_preserves_upstream_status_code(client) -> None:
+    with patch("app.api.routes.TransformerEngine.generate_guide_me_helper") as generate_helper:
+        generate_helper.side_effect = GuideMeGenerationError("Rate limit exceeded", status_code=429)
+        response = client.post(
+            "/api/guide_me/generate",
+            headers=AUTH_HEADERS,
+            json={
+                "session_id": "sess_guide",
+                "conversation_id": "conv_guide",
+                "user_id_hash": "user_1",
+                "target_llm": {"provider": "openai", "model": "gpt-5"},
+                "helper_kind": "answer_extraction",
+                "prompt": "Return strict JSON with optional keys who, task, context, output, instructions.",
+            },
+        )
+    assert response.status_code == 429

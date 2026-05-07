@@ -119,8 +119,10 @@ class FinalResponseService:
                 profile.resolved_model,
                 profile.provider,
             )
-            raise ValueError(
-                f"Model '{profile.resolved_model}' does not support live web retrievals."
+            raise FinalResponseProviderError(
+                f"Model '{profile.resolved_model}' does not support live web retrievals. "
+                "Use a model that supports live web retrieval or disable request_live_web_search.",
+                status_code=400,
             )
         request = self._build_request(
             runtime_config=runtime_config,
@@ -219,9 +221,15 @@ def resolve_final_response_intent(
     raw_prompt: str,
     transformed_prompt: str | None = None,
     supports_web_search: bool = True,
+    request_live_web_search: bool | None = None,
 ) -> FinalResponseIntent:
     transformed = transformed_prompt or ""
     combined = "\n".join(part for part in [raw_prompt, transformed] if part.strip())
+    if request_live_web_search is not None:
+        return FinalResponseIntent(
+            use_web_search=bool(request_live_web_search),
+            use_image_generation=_wants_image_generation(combined),
+        )
     return FinalResponseIntent(
         use_web_search=(
             supports_web_search
@@ -326,8 +334,61 @@ def _extract_generated_images(payload: dict[str, Any]) -> list[GeneratedImagePay
             continue
         result = item.get("result")
         if isinstance(result, str) and result:
-            images.append(GeneratedImagePayload(base64_data=result))
+            images.append(GeneratedImagePayload(media_type="image/png", base64_data=result))
+            continue
+        if not isinstance(result, dict):
+            continue
+        base64_data, media_type = _extract_image_result(result)
+        if not base64_data:
+            continue
+        images.append(
+            GeneratedImagePayload(
+                media_type=media_type if media_type else "image/png",
+                base64_data=base64_data,
+            )
+        )
     return images
+
+
+def _extract_image_result(result: dict[str, Any]) -> tuple[str | None, str | None]:
+    for key in ("data", "b64_json", "base64", "base64_data", "result"):
+        value = result.get(key)
+        if isinstance(value, str):
+            normalized = _strip_data_uri(value)
+            if normalized:
+                return normalized, _extract_media_type(result)
+
+    if (
+        isinstance(result.get("image"), dict)
+        and isinstance(result["image"], dict)
+    ):
+        nested_image = result["image"]
+        for key in ("data", "b64_json", "base64", "base64_data"):
+            value = nested_image.get(key)
+            if isinstance(value, str):
+                normalized = _strip_data_uri(value)
+                if normalized:
+                    media_type = _extract_media_type(nested_image) or _extract_media_type(result)
+                    return normalized, media_type
+    return None, _extract_media_type(result)
+
+
+def _extract_media_type(result: dict[str, Any]) -> str | None:
+    media_type = result.get("media_type") or result.get("mime_type")
+    if isinstance(media_type, str):
+        normalized = media_type.strip().lower()
+        if normalized:
+            return normalized
+    return None
+
+
+def _strip_data_uri(value: str) -> str | None:
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if normalized.startswith("data:") and ";base64," in normalized:
+        return normalized.split(";base64,", 1)[1].strip()
+    return normalized
 
 
 def _extract_incomplete_response_error(payload: dict[str, Any]) -> str | None:

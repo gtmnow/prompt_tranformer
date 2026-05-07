@@ -391,7 +391,7 @@ Add a conversation object to the request payload.
 {
   "session_id": "sess_123",
   "conversation_id": "conv_123",
-  "user_id": "user_1",
+  "user_id_hash": "user_1",
   "raw_prompt": "Draft an outreach email for this prospect list.",
   "target_llm": {
     "provider": "openai",
@@ -441,7 +441,7 @@ If backward compatibility is required, `conversation` should be optional at firs
 {
   "session_id": "sess_123",
   "conversation_id": "conv_123",
-  "user_id": "user_1",
+  "user_id_hash": "user_1",
   "result_type": "coaching",
   "task_type": "writing",
   "coaching_tip": "Add the role, the intended use, and the output format so I can transform this safely.",

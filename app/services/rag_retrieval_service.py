@@ -5,7 +5,7 @@ import re
 import uuid
 from dataclasses import dataclass
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -198,13 +198,27 @@ class RagRetrievalService:
         ).first()
         if collection is None:
             return []
-        rows = self.db_session.execute(
+
+        base_query = (
             select(RagChunk, RagDocument)
             .join(RagDocument, RagDocument.id == RagChunk.document_id)
             .where(
                 RagDocument.collection_id == collection.id,
                 RagDocument.status == "ready",
             )
+        )
+        scan_limit = max(
+            top_k * 4,
+            120,
+            collection.max_results or 0,
+        )
+        if require_keyword_overlap and query_terms:
+            base_query = base_query.where(
+                or_(*self._build_keyword_filters(query_terms))
+            )
+
+        rows = self.db_session.execute(
+            base_query.order_by(RagChunk.created_at.desc()).limit(scan_limit)
         ).all()
         scored: list[dict[str, str | float | int]] = []
         for chunk, document in rows:
@@ -238,6 +252,15 @@ class RagRetrievalService:
             }
             for item in ranked
         ]
+
+    @staticmethod
+    def _build_keyword_filters(query_terms: set[str]) -> list:
+        clauses: list = []
+        for term in sorted(query_terms)[:6]:
+            pattern = f"%{term}%"
+            clauses.append(RagChunk.chunk_text.ilike(pattern))
+            clauses.append(RagDocument.filename.ilike(pattern))
+        return clauses
 
     @staticmethod
     def _is_personal_context_query(text: str) -> bool:

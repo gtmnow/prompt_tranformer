@@ -27,7 +27,6 @@ Not included:
 
 - profile generation or learning
 - conversation management
-- prompt execution
 - merging profile layers at runtime
 
 ## Repo map
@@ -118,7 +117,7 @@ Chat execution endpoint:
 
 Score read endpoint:
 
-- `GET /api/conversation_scores/{conversation_id}?user_id=<user_id>`
+- `GET /api/conversation_scores/{conversation_id}?user_id_hash=<user_id_hash>`
 
 Health endpoint:
 
@@ -135,7 +134,7 @@ Example request:
 {
   "session_id": "sess_123",
   "conversation_id": "conv_123",
-  "user_id": "user_1",
+  "user_id_hash": "user_1",
   "raw_prompt": "Explain this concept simply",
   "target_llm": {
     "provider": "openai",
@@ -150,7 +149,7 @@ Example successful response:
 {
   "session_id": "sess_123",
   "conversation_id": "conv_123",
-  "user_id": "user_1",
+  "user_id_hash": "user_1",
   "result_type": "transformed",
   "transformed_prompt": "Explain the topic according to the guidance below.\nStart with the direct answer before supporting detail.\n...",
   "task_type": "explanation",
@@ -242,7 +241,7 @@ Each requirement object includes:
 - `reason`
 - `improvement_hint`
 
-Reloads should use `GET /api/conversation_scores/{conversation_id}?user_id=<user_id>`, which returns the persisted scoring rollups plus the same `conversation.requirements` field objects.
+Reloads should use `GET /api/conversation_scores/{conversation_id}?user_id_hash=<user_id_hash>`, which returns the persisted scoring rollups plus the same `conversation.requirements` field objects.
 
 Planned feature work for conversation-level prompt enforcement, compliance checks, and PII checks is documented in [docs/prompt_enforcement_implementation_spec.md](./docs/prompt_enforcement_implementation_spec.md).
 
@@ -301,7 +300,7 @@ The MVP ships with nine sample users in the database. Each one mirrors the defau
 
 `user_missing` is intentionally absent and should exercise generic fallback behavior.
 
-These seeded IDs stand in for future hashed user IDs. The service assumes `user_id == user_id_hash`.
+These seeded IDs stand in for future hashed user IDs. The service uses `user_id_hash` as the profile and tenant lookup key.
 
 ## Railway
 

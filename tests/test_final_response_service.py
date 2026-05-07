@@ -7,9 +7,11 @@ from app.schemas.transform import AttachmentReference, ConversationHistoryTurn
 from app.services.final_response_service import (
     OPENAI_WEB_SEARCH_MIN_OUTPUT_TOKENS,
     FinalResponseIntent,
+    FinalResponseProviderError,
     _build_input_items,
     _build_messages,
     _extract_incomplete_response_error,
+    _extract_generated_images,
     resolve_final_response_intent,
 )
 from app.services.llm_provider_profiles import ResolvedLlmProviderProfile
@@ -137,6 +139,30 @@ class FinalResponseServiceTests(unittest.TestCase):
             FinalResponseIntent(use_web_search=False, use_image_generation=False),
         )
 
+    def test_resolve_final_response_intent_prefers_explicit_request(self) -> None:
+        intent = resolve_final_response_intent(
+            raw_prompt="Summarize this product strategy memo for exec review.",
+            transformed_prompt="Summarize the memo clearly for executives.",
+            request_live_web_search=True,
+        )
+
+        self.assertEqual(
+            intent,
+            FinalResponseIntent(use_web_search=True, use_image_generation=False),
+        )
+
+    def test_resolve_final_response_intent_false_overrides_keywords(self) -> None:
+        intent = resolve_final_response_intent(
+            raw_prompt="What are today's top trends in candidate sourcing?",
+            transformed_prompt="What are today's top trends in candidate sourcing?",
+            request_live_web_search=False,
+        )
+
+        self.assertEqual(
+            intent,
+            FinalResponseIntent(use_web_search=False, use_image_generation=False),
+        )
+
     def test_build_request_uses_profile_resolved_model_and_gateway_fields(self) -> None:
         from app.services.final_response_service import FinalResponseService
 
@@ -211,7 +237,7 @@ class FinalResponseServiceTests(unittest.TestCase):
             "resolve",
             return_value=unsupported_profile,
         ):
-            with self.assertRaises(ValueError) as exc_info:
+            with self.assertRaises(FinalResponseProviderError) as exc_info:
                 service.generate(
                     runtime_config=_runtime_config(provider="xai", model="grok-4-1"),
                     transformed_prompt="Find the latest hiring trends.",
@@ -220,6 +246,7 @@ class FinalResponseServiceTests(unittest.TestCase):
                     intent=FinalResponseIntent(use_web_search=True, use_image_generation=False),
                 )
             self.assertIn("does not support live web retrievals", str(exc_info.exception))
+            self.assertEqual(exc_info.exception.status_code, 400)
 
         profile = _profile(
             provider="xai",
@@ -261,6 +288,25 @@ class FinalResponseServiceTests(unittest.TestCase):
             error,
             "LLM provider response was incomplete because it hit the max_output_tokens limit.",
         )
+
+    def test_extract_generated_images_preserves_media_type(self) -> None:
+        images = _extract_generated_images(
+            {
+                "output": [
+                    {
+                        "type": "image_generation_call",
+                        "result": {
+                            "data": "iVBORw0KGgo=",
+                            "media_type": "image/jpeg",
+                        },
+                    }
+                ]
+            }
+        )
+
+        self.assertEqual(len(images), 1)
+        self.assertEqual(images[0].media_type, "image/jpeg")
+        self.assertEqual(images[0].base64_data, "iVBORw0KGgo=")
 
     def test_rag_prompt_assembly_compresses_and_budgets_reference_context(self) -> None:
         service = RagPromptAssemblyService()

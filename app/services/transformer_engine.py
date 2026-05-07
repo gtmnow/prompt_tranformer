@@ -365,6 +365,7 @@ class TransformerEngine:
                 intent=resolve_final_response_intent(
                     raw_prompt=payload.raw_prompt,
                     transformed_prompt=payload.raw_prompt,
+                    request_live_web_search=payload.request_live_web_search,
                 ),
                 reference_context=self._build_reference_context_for_prompt(
                     tenant_id=runtime_llm.tenant_id,
@@ -469,6 +470,7 @@ class TransformerEngine:
             intent=resolve_final_response_intent(
                 raw_prompt=payload.raw_prompt,
                 transformed_prompt=transform_response.transformed_prompt or payload.raw_prompt,
+                request_live_web_search=payload.request_live_web_search,
             ),
             reference_context=reference_context,
         )

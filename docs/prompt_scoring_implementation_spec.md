@@ -311,7 +311,7 @@ Recommended read model:
 
 Recommended endpoint:
 
-- `GET /api/conversation_scores/{conversation_id}?user_id=<user_id_hash>`
+- `GET /api/conversation_scores/{conversation_id}?user_id_hash=<user_id_hash>`
 
 When hybrid scoring is introduced, this read path should continue to return the final fused score used by the UI.
 

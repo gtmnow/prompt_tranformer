@@ -1036,7 +1036,7 @@ def test_execute_chat_continues_when_retrieval_event_logging_fails(client) -> No
     assert body["metadata"]["retrieval_scope_counts"]["user"] == 1
     assert body["metadata"]["retrieval_document_count"] == 1
     request_json = mock_client.post.call_args.kwargs["json"]
-    assert request_json["tools"] == [{"type": "web_search"}]
+    assert request_json.get("tools", []) == []
 
 
 def test_execute_chat_preserves_provider_bad_request_status_for_actionable_failures(client) -> None:

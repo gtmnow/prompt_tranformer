@@ -214,6 +214,7 @@ class ExecuteChatRequest(BaseModel):
     summary_type: Optional[int] = Field(default=None, ge=1, le=9)
     enforcement_level: Optional[EnforcementLevel] = Field(default=None)
     transform_enabled: bool = True
+    request_live_web_search: bool = False
 
     @model_validator(mode="after")
     def validate_conversation_id_match(self) -> "ExecuteChatRequest":

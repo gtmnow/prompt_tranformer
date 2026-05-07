@@ -5,8 +5,7 @@ from dataclasses import dataclass
 
 from app.schemas.transform import GuideMeHelperKind
 from app.services.llm_gateway import LlmGatewayService
-from app.services.llm_types import TransformerLlmRequest
-from app.services.llm_types import NormalizedTokenUsage
+from app.services.llm_types import NormalizedTokenUsage, TransformerLlmError, TransformerLlmRequest
 from app.services.runtime_llm import RuntimeLlmConfig
 
 
@@ -14,6 +13,15 @@ from app.services.runtime_llm import RuntimeLlmConfig
 class GuideMeGenerationResult:
     payload: dict
     usage: NormalizedTokenUsage | None
+
+
+@dataclass(frozen=True)
+class GuideMeGenerationError(Exception):
+    message: str
+    status_code: int = 502
+
+    def __str__(self) -> str:
+        return self.message
 
 
 class GuideMeGenerationService:
@@ -41,7 +49,10 @@ class GuideMeGenerationService:
         )
         response, error = self.gateway.invoke(request)
         if error is not None:
-            raise ValueError(f"Guide Me helper request failed: {error.message}")
+            raise GuideMeGenerationError(
+                f"Guide Me helper request failed: {error.message}",
+                status_code=_map_gateway_error_status_code(error),
+            )
         if response is None:
             raise ValueError("Guide Me helper request returned no response.")
         try:
@@ -75,3 +86,13 @@ class GuideMeGenerationService:
             "azure_openai": "https://api.openai.com/v1",
         }
         return defaults.get(provider.strip().casefold(), "https://api.openai.com/v1")
+
+
+def _map_gateway_error_status_code(error: TransformerLlmError) -> int:
+    if error.status_code is not None:
+        return error.status_code
+
+    code = error.code.strip().casefold()
+    if "timeout" in code:
+        return 504
+    return 502

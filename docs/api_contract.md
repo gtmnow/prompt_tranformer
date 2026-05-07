@@ -25,7 +25,7 @@ Request body:
 {
   "session_id": "sess_123",
   "conversation_id": "conv_123",
-  "user_id": "user_1",
+  "user_id_hash": "user_1",
   "raw_prompt": "Explain this concept simply",
   "target_llm": {
     "provider": "openai",
@@ -42,12 +42,53 @@ Optional request fields:
   - optional persona override in the range `1..9`
 - `enforcement_level`
   - optional enforcement override: `none`, `low`, `moderate`, or `full`
+- `request_live_web_search`
+  - optional explicit override for live web retrieval intent (`true` or `false`)
+  - when omitted, heuristics fall back to transformed/raw prompt signals
+
+### `POST /api/chat/execute`
+
+Required headers when service auth is enabled:
+
+- `Authorization: Bearer <PROMPT_TRANSFORMER_API_KEY>`
+- `X-Client-Id: <approved-client-id>`
+
+Request body:
+
+```json
+{
+  "session_id": "sess_123",
+  "conversation_id": "conv_123",
+  "user_id_hash": "user_1",
+  "raw_prompt": "Explain this concept simply",
+  "target_llm": {
+    "provider": "openai",
+    "model": "gpt-4.1"
+  },
+  "conversation_history": [],
+  "attachments": [],
+  "transform_enabled": true,
+  "request_live_web_search": true
+}
+```
+
+Response body:
+
+```json
+{
+  "session_id": "sess_123",
+  "conversation_id": "conv_123",
+  "user_id_hash": "user_1",
+  "result_type": "transformed",
+  "assistant_text": "..."
+}
+```
 
 ## Field meanings
 
 - `session_id`
   - opaque caller-provided request/session identifier
-- `user_id`
+- `user_id_hash`
   - non-PII identifier used directly as profile lookup key
 - `conversation_id`
   - caller-provided conversation/thread identifier
@@ -110,7 +151,7 @@ Field meanings:
 {
   "session_id": "sess_123",
   "conversation_id": "conv_123",
-  "user_id": "user_1",
+  "user_id_hash": "user_1",
   "result_type": "transformed",
   "transformed_prompt": "Explain the topic according to the guidance below.\n...",
   "task_type": "explanation",
@@ -195,7 +236,7 @@ The service can return:
 
 Required query params:
 
-- `user_id`
+- `user_id_hash`
 
 Required headers when service auth is enabled:
 
@@ -207,7 +248,7 @@ Response body:
 ```json
 {
   "conversation_id": "conv_123",
-  "user_id": "user_1",
+  "user_id_hash": "user_1",
   "scoring_version": "v4",
   "initial_score": 62,
   "best_score": 81,
@@ -321,7 +362,7 @@ Meaning:
 
 ## Notes for integrators
 
-- `user_id` is treated as a hashed external identifier by convention.
+- `user_id_hash` is treated as a hashed external identifier by convention.
 - The service is deterministic and side-effect free unless request logging is enabled.
 - Callers should branch on `result_type` and only forward `transformed_prompt` to the target LLM when `result_type == "transformed"`.
 - Callers should not depend on the exact wording of `transformed_prompt`, `coaching_tip`, or `blocking_message`; they should depend on the contract fields and general deterministic behavior.

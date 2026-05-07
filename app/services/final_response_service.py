@@ -124,6 +124,18 @@ class FinalResponseService:
                 "Use a model that supports live web retrieval or disable request_live_web_search.",
                 status_code=400,
             )
+
+        resolved_max_output_tokens = _resolve_max_output_tokens(
+            profile=profile,
+            document_attachments=[attachment for attachment in attachments if attachment.kind in DOCUMENT_KINDS],
+            use_image_generation=effective_intent.use_image_generation,
+            use_web_search=effective_intent.use_web_search,
+            requested_max_output_tokens=runtime_config_output_tokens(runtime_config),
+        )
+        final_prompt = _append_max_output_budget(
+            prompt=final_prompt,
+            max_output_tokens=resolved_max_output_tokens,
+        )
         request = self._build_request(
             runtime_config=runtime_config,
             transformed_prompt=final_prompt,
@@ -131,6 +143,7 @@ class FinalResponseService:
             attachments=attachments,
             intent=effective_intent,
             profile=profile,
+            resolved_max_output_tokens=resolved_max_output_tokens,
         )
 
         response, error = self.gateway.invoke(request)
@@ -165,6 +178,7 @@ class FinalResponseService:
         attachments: list[AttachmentReference],
         intent: FinalResponseIntent,
         profile: ResolvedLlmProviderProfile,
+        resolved_max_output_tokens: int | None = None,
     ) -> TransformerLlmRequest:
         document_attachments = [attachment for attachment in attachments if attachment.kind in DOCUMENT_KINDS]
         image_attachments = [attachment for attachment in attachments if attachment.kind in IMAGE_KINDS]
@@ -200,7 +214,9 @@ class FinalResponseService:
                 use_web_search=intent.use_web_search,
             ),
             text_format=None if intent.use_image_generation else {"format": {"type": "text"}},
-            max_output_tokens=_resolve_max_output_tokens(
+            max_output_tokens=resolved_max_output_tokens
+            if resolved_max_output_tokens is not None
+            else _resolve_max_output_tokens(
                 profile=profile,
                 document_attachments=document_attachments,
                 use_image_generation=intent.use_image_generation,
@@ -405,8 +421,20 @@ def _extract_incomplete_response_error(payload: dict[str, Any]) -> str | None:
             if normalized_reason_lower in {"max_tokens", "max_output_tokens", "max_output_token"}:
                 return "LLM provider response was incomplete because it hit the max_output_tokens limit."
             return f"LLM provider response was incomplete: {normalized_reason}."
-
     return "LLM provider response was incomplete."
+
+
+def _append_max_output_budget(prompt: str, max_output_tokens: int) -> str:
+    cleaned_prompt = prompt.strip()
+    if max_output_tokens <= 0:
+        return cleaned_prompt
+
+    directive = (
+        f"\n\nOutput budget: do not exceed {max_output_tokens} output tokens."
+    )
+    if "output tokens" in cleaned_prompt.casefold():
+        return cleaned_prompt
+    return cleaned_prompt + directive
 
 
 def _map_gateway_error_status_code(error: TransformerLlmError) -> int:

@@ -10,6 +10,7 @@ from app.services.final_response_service import (
     FinalResponseProviderError,
     _build_input_items,
     _build_messages,
+    _append_max_output_budget,
     _extract_incomplete_response_error,
     _extract_generated_images,
     resolve_final_response_intent,
@@ -18,6 +19,7 @@ from app.services.llm_provider_profiles import ResolvedLlmProviderProfile
 from app.services.llm_provider_profiles import LlmProviderProfileService
 from app.services.rag_prompt_assembly_service import RagPromptAssemblyService
 from app.services.runtime_llm import RuntimeLlmConfig
+from app.services.llm_types import TransformerLlmResponse
 
 
 def _profile(
@@ -161,6 +163,51 @@ class FinalResponseServiceTests(unittest.TestCase):
         self.assertEqual(
             intent,
             FinalResponseIntent(use_web_search=False, use_image_generation=False),
+        )
+
+    def test_generate_includes_max_output_budget_directive(self) -> None:
+        from app.services.final_response_service import FinalResponseService
+
+        service = FinalResponseService()
+        profile = _profile(
+            provider="openai",
+            api_family="responses",
+            token_parameter="max_output_tokens",
+            supports_web_search=True,
+        )
+
+        with patch.object(service.provider_profiles, "resolve", return_value=profile), patch.object(
+            service.gateway,
+            "invoke",
+            return_value=(
+                TransformerLlmResponse(
+                    provider="openai",
+                    model="test-model",
+                    output_text="Done.",
+                    raw_payload={"output": []},
+                    usage={},
+                ),
+                None,
+            ),
+        ) as invoke_mock:
+            service.generate(
+                runtime_config=_runtime_config(provider="openai", model="gpt-4.1"),
+                transformed_prompt="Summarize the policy briefly.",
+                conversation_history=[],
+                attachments=[],
+                intent=FinalResponseIntent(use_web_search=False, use_image_generation=False),
+            )
+
+        actual_request = invoke_mock.call_args.args[0]
+        self.assertEqual(
+            actual_request.user_prompt,
+            _append_max_output_budget("Summarize the policy briefly.", 600),
+        )
+
+    def test_append_max_output_budget_directive(self) -> None:
+        self.assertIn(
+            "do not exceed 420 output tokens",
+            _append_max_output_budget("Generate a short summary.", 420),
         )
 
     def test_build_request_uses_profile_resolved_model_and_gateway_fields(self) -> None:

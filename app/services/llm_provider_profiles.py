@@ -36,7 +36,7 @@ class LlmProviderProfileService:
             raise ValueError(f"Unsupported provider profile: {provider}")
 
         models = provider_profile.get("models", {})
-        resolved_model = model if model in models else provider_profile.get("default_model", model)
+        resolved_model = model
         model_profile = models.get(resolved_model, {})
 
         merged = {**default_profile, **provider_profile, **model_profile}

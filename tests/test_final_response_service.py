@@ -13,6 +13,7 @@ from app.services.final_response_service import (
     resolve_final_response_intent,
 )
 from app.services.llm_provider_profiles import ResolvedLlmProviderProfile
+from app.services.llm_provider_profiles import LlmProviderProfileService
 from app.services.rag_prompt_assembly_service import RagPromptAssemblyService
 from app.services.runtime_llm import RuntimeLlmConfig
 
@@ -52,6 +53,13 @@ def _runtime_config(*, provider: str = "openai", model: str = "gpt-4.1") -> Runt
 
 
 class FinalResponseServiceTests(unittest.TestCase):
+    def test_provider_profiles_preserve_requested_unknown_model(self) -> None:
+        profile = LlmProviderProfileService().resolve("xai", "grok-4-1")
+
+        self.assertEqual(profile.requested_model, "grok-4-1")
+        self.assertEqual(profile.resolved_model, "grok-4-1")
+        self.assertEqual(profile.api_family, "responses")
+
     def test_build_messages_uses_conversation_history_for_chat_completions(self) -> None:
         messages = _build_messages(
             conversation_history=[

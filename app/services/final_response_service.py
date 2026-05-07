@@ -3,11 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-import httpx
-
 from app.core.config import get_settings
 from app.schemas.transform import AttachmentReference, ConversationHistoryTurn, GeneratedImagePayload
+from app.services.llm_gateway import LlmGatewayService
 from app.services.llm_provider_profiles import LlmProviderProfileService, ResolvedLlmProviderProfile
+from app.services.llm_types import TransformerLlmError, TransformerLlmRequest, TransformerLlmResponse
 from app.services.runtime_llm import RuntimeLlmConfig
 
 
@@ -28,23 +28,32 @@ IMAGE_GENERATION_KEYWORDS = {
     "edit this image",
     "restyle",
 }
-WEB_SEARCH_KEYWORDS = {
+WEB_EXPLICIT_LOOKUP_SIGNALS = {
+    "browse the web",
+    "browse the internet",
+    "search the web",
     "search the internet",
     "search internet",
-    "search the web",
-    "browse the web",
-    "look it up",
+    "web search",
     "look this up",
+    "look it up",
+    "online",
+}
+WEB_FRESHNESS_SIGNALS = {
     "latest",
     "today",
     "current",
+    "currently",
+    "recent",
     "recent news",
     "top news",
-    "news items",
     "headline",
-    "web search",
-    "online",
+    "headlines",
+    "marketplace",
+    "public guidance",
 }
+WEB_LOOKUP_VERBS = {"search", "browse", "look up", "find"}
+WEB_PUBLIC_TARGETS = {"internet", "web", "online", "news", "public", "market", "marketplace"}
 OPENAI_IMAGE_GENERATION_MODELS = {
     "gpt-4.1",
     "gpt-4.1-mini",
@@ -54,6 +63,12 @@ OPENAI_IMAGE_GENERATION_MODELS = {
     "gpt-image-1",
 }
 OPENAI_WEB_SEARCH_MIN_OUTPUT_TOKENS = 4000
+
+
+@dataclass(frozen=True)
+class FinalResponseIntent:
+    use_web_search: bool = False
+    use_image_generation: bool = False
 
 
 @dataclass(frozen=True)
@@ -75,157 +90,147 @@ class FinalResponseProviderError(Exception):
 class FinalResponseService:
     def __init__(self) -> None:
         self.provider_profiles = LlmProviderProfileService()
+        self.gateway = LlmGatewayService()
 
     def generate(
         self,
         *,
         runtime_config: RuntimeLlmConfig,
-        resolved_model: str,
         transformed_prompt: str,
         conversation_history: list[ConversationHistoryTurn],
         attachments: list[AttachmentReference],
+        intent: FinalResponseIntent | None = None,
         reference_context: str | None = None,
     ) -> FinalResponseResult:
         final_prompt = transformed_prompt if not reference_context else f"{reference_context}\n\n{transformed_prompt}"
         provider = runtime_config.provider.strip().casefold()
-        if provider in {"openai", "xai"}:
-            return self._generate_openai_like_response(
-                runtime_config=runtime_config,
-                resolved_model=resolved_model,
-                transformed_prompt=final_prompt,
-                conversation_history=conversation_history,
-                attachments=attachments,
-            )
-        raise ValueError(f"Final response generation is not implemented for provider: {runtime_config.provider}")
+        if provider not in {"openai", "xai", "azure_openai"}:
+            raise ValueError(f"Final response generation is not implemented for provider: {runtime_config.provider}")
 
-    def _generate_openai_like_response(
-        self,
-        *,
-        runtime_config: RuntimeLlmConfig,
-        resolved_model: str,
-        transformed_prompt: str,
-        conversation_history: list[ConversationHistoryTurn],
-        attachments: list[AttachmentReference],
-    ) -> FinalResponseResult:
-        document_attachments = [attachment for attachment in attachments if attachment.kind in DOCUMENT_KINDS]
-        image_attachments = [attachment for attachment in attachments if attachment.kind in IMAGE_KINDS]
-        wants_image_generation = _wants_image_generation(transformed_prompt)
-
-        if wants_image_generation and not _supports_openai_image_generation(resolved_model):
-            raise ValueError("Image generation is not supported with the resolved model.")
-
-        profile = self.provider_profiles.resolve(runtime_config.provider, resolved_model)
-        url = f"{_resolve_base_url(runtime_config.endpoint_url, runtime_config.provider).rstrip('/')}/{profile.endpoint_path.lstrip('/')}"
-        headers = {"Authorization": f"Bearer {runtime_config.api_key}", "Content-Type": "application/json"}
-        payload = _build_openai_like_payload(
-            profile=profile,
-            model=resolved_model,
-            conversation_history=conversation_history,
+        effective_intent = intent or resolve_final_response_intent(
+            raw_prompt=transformed_prompt,
             transformed_prompt=transformed_prompt,
-            image_attachments=image_attachments,
-            document_attachments=document_attachments,
-            wants_image_generation=wants_image_generation,
-            max_output_tokens=runtime_config_output_tokens(runtime_config),
+        )
+        request = self._build_request(
+            runtime_config=runtime_config,
+            transformed_prompt=final_prompt,
+            conversation_history=conversation_history,
+            attachments=attachments,
+            intent=effective_intent,
         )
 
-        try:
-            with httpx.Client(timeout=profile.request_timeout_seconds) as client:
-                response = client.post(url, headers=headers, json=payload)
-        except httpx.TimeoutException as exc:
+        response, error = self.gateway.invoke(request)
+        if error is not None:
             raise FinalResponseProviderError(
-                f"LLM provider timed out after {profile.request_timeout_seconds:g} seconds.",
-                status_code=504,
-            ) from exc
-        except httpx.HTTPError as exc:
-            raise FinalResponseProviderError(
-                f"LLM provider request failed before a response was received: {exc}",
-                status_code=502,
-            ) from exc
-
-        if response.status_code >= 400:
-            detail = _extract_error_detail(response)
-            raise FinalResponseProviderError(
-                f"LLM provider request failed: {detail}",
-                status_code=_map_provider_status_code(response.status_code),
+                _build_gateway_error_message(error, profile=self.provider_profiles.resolve(runtime_config.provider, runtime_config.model)),
+                status_code=_map_gateway_error_status_code(error),
             )
+        if response is None:
+            raise FinalResponseProviderError("LLM provider returned no response.", status_code=502)
 
-        data = response.json()
-        incomplete_error = _extract_incomplete_response_error(data)
+        payload = response.raw_payload if isinstance(response.raw_payload, dict) else {}
+        incomplete_error = _extract_incomplete_response_error(payload)
         if incomplete_error:
             raise ValueError(incomplete_error)
-        text = _extract_output_text(data, profile=profile)
-        generated_images = _extract_generated_images(data, profile=profile)
+
+        text = response.output_text.strip()
+        generated_images = _extract_generated_images(payload)
         if not text and generated_images:
             text = "Generated image attached."
         if not text and not generated_images:
             raise ValueError("LLM provider returned an empty response.")
 
-        usage = data.get("usage") if isinstance(data.get("usage"), dict) else None
-        return FinalResponseResult(text=text, generated_images=generated_images, usage=usage)
+        return FinalResponseResult(text=text, generated_images=generated_images, usage=response.usage)
+
+    def _build_request(
+        self,
+        *,
+        runtime_config: RuntimeLlmConfig,
+        transformed_prompt: str,
+        conversation_history: list[ConversationHistoryTurn],
+        attachments: list[AttachmentReference],
+        intent: FinalResponseIntent,
+    ) -> TransformerLlmRequest:
+        document_attachments = [attachment for attachment in attachments if attachment.kind in DOCUMENT_KINDS]
+        image_attachments = [attachment for attachment in attachments if attachment.kind in IMAGE_KINDS]
+        profile = self.provider_profiles.resolve(runtime_config.provider, runtime_config.model)
+        resolved_model = profile.resolved_model
+
+        if intent.use_image_generation and not _supports_openai_image_generation(resolved_model):
+            raise ValueError("Image generation is not supported with the resolved model.")
+
+        return TransformerLlmRequest(
+            provider=runtime_config.provider,  # type: ignore[arg-type]
+            model=resolved_model,
+            base_url=_resolve_base_url(runtime_config.endpoint_url, runtime_config.provider),
+            api_key=runtime_config.api_key,
+            system_prompt="",
+            user_prompt=transformed_prompt,
+            conversation_messages=_build_messages(
+                conversation_history=conversation_history,
+                transformed_prompt=transformed_prompt,
+            )
+            if profile.api_family == "chat_completions"
+            else [],
+            input_items=_build_input_items(
+                conversation_history=conversation_history,
+                transformed_prompt=transformed_prompt,
+                image_attachments=image_attachments,
+            )
+            if profile.api_family != "chat_completions"
+            else [],
+            tools=_build_tools(
+                profile=profile,
+                document_attachments=document_attachments,
+                use_image_generation=intent.use_image_generation,
+                use_web_search=intent.use_web_search,
+            ),
+            text_format=None if intent.use_image_generation else {"format": {"type": "text"}},
+            max_output_tokens=_resolve_max_output_tokens(
+                profile=profile,
+                document_attachments=document_attachments,
+                use_image_generation=intent.use_image_generation,
+                use_web_search=intent.use_web_search,
+                requested_max_output_tokens=runtime_config_output_tokens(runtime_config),
+            ),
+            temperature=0.2 if _supports_temperature_parameter(resolved_model) else 0.0,
+            expected_output="text",
+        )
 
 
 def runtime_config_output_tokens(runtime_config: RuntimeLlmConfig) -> int:
     return get_settings().final_response_max_output_tokens
 
 
-def _build_openai_like_payload(
+def resolve_final_response_intent(
     *,
-    profile: ResolvedLlmProviderProfile,
-    model: str,
-    conversation_history: list[ConversationHistoryTurn],
-    transformed_prompt: str,
-    image_attachments: list[AttachmentReference],
-    document_attachments: list[AttachmentReference],
-    wants_image_generation: bool,
-    max_output_tokens: int,
-) -> dict[str, Any]:
-    wants_web_search = _wants_web_search(transformed_prompt)
-    if profile.api_family == "chat_completions":
-        payload: dict[str, Any] = {
-            "model": model,
-            "messages": _build_messages(
-                conversation_history=conversation_history,
-                transformed_prompt=transformed_prompt,
-            ),
-            profile.token_parameter: max_output_tokens,
-        }
-        if _supports_temperature_parameter(model):
-            payload["temperature"] = 0.2
-        return payload
-
-    payload = {
-        "model": model,
-        "input": _build_input_items(
-            conversation_history=conversation_history,
-            transformed_prompt=transformed_prompt,
-            image_attachments=image_attachments,
-        ),
-        profile.token_parameter: _resolve_max_output_tokens(
-            profile=profile,
-            document_attachments=document_attachments,
-            wants_image_generation=wants_image_generation,
-            wants_web_search=wants_web_search,
-            requested_max_output_tokens=max_output_tokens,
-        ),
-        "store": False,
-    }
-
-    if _supports_temperature_parameter(model):
-        payload["temperature"] = 0.2
-
-    if not wants_image_generation:
-        payload["text"] = {"format": {"type": "text"}}
-
-    tools = _build_tools(
-        profile=profile,
-        document_attachments=document_attachments,
-        wants_image_generation=wants_image_generation,
-        wants_web_search=wants_web_search,
+    raw_prompt: str,
+    transformed_prompt: str | None = None,
+) -> FinalResponseIntent:
+    transformed = transformed_prompt or ""
+    combined = "\n".join(part for part in [raw_prompt, transformed] if part.strip())
+    return FinalResponseIntent(
+        use_web_search=_should_use_web_search(raw_prompt=raw_prompt, transformed_prompt=combined),
+        use_image_generation=_wants_image_generation(combined),
     )
-    if tools:
-        payload["tools"] = tools
 
-    return payload
+
+def _should_use_web_search(*, raw_prompt: str, transformed_prompt: str) -> bool:
+    raw_normalized = raw_prompt.casefold()
+    transformed_normalized = transformed_prompt.casefold()
+    if any(signal in raw_normalized for signal in WEB_EXPLICIT_LOOKUP_SIGNALS):
+        return True
+    if any(signal in raw_normalized for signal in WEB_FRESHNESS_SIGNALS):
+        return True
+    if _has_lookup_and_public_target(raw_normalized):
+        return True
+    return any(signal in transformed_normalized for signal in WEB_EXPLICIT_LOOKUP_SIGNALS)
+
+
+def _has_lookup_and_public_target(text: str) -> bool:
+    has_lookup_verb = any(verb in text for verb in WEB_LOOKUP_VERBS)
+    has_public_target = any(target in text for target in WEB_PUBLIC_TARGETS)
+    return has_lookup_verb and has_public_target
 
 
 def _build_messages(
@@ -245,29 +250,31 @@ def _build_tools(
     *,
     profile: ResolvedLlmProviderProfile,
     document_attachments: list[AttachmentReference],
-    wants_image_generation: bool,
-    wants_web_search: bool,
+    use_image_generation: bool,
+    use_web_search: bool,
 ) -> list[dict[str, Any]]:
     tools: list[dict[str, Any]] = []
-    if profile.api_family == "responses" and wants_web_search:
+    if profile.api_family == "responses" and use_web_search:
         tools.append({"type": "web_search"})
 
     if document_attachments and _supports_code_interpreter(profile.provider):
-        tools.append(
-            {
-                "type": "code_interpreter",
-                "container": {
-                    "type": "auto",
-                    "file_ids": [
-                        attachment.provider_file_id
-                        for attachment in document_attachments
-                        if attachment.provider_file_id
-                    ],
-                },
-            }
-        )
+        file_ids = [
+            attachment.provider_file_id
+            for attachment in document_attachments
+            if attachment.provider_file_id
+        ]
+        if file_ids:
+            tools.append(
+                {
+                    "type": "code_interpreter",
+                    "container": {
+                        "type": "auto",
+                        "file_ids": file_ids,
+                    },
+                }
+            )
 
-    if wants_image_generation and _supports_image_generation_tool(profile.provider):
+    if use_image_generation and _supports_image_generation_tool(profile.provider):
         tools.append({"type": "image_generation", "quality": "high"})
 
     return tools
@@ -292,45 +299,7 @@ def _build_input_items(
     return input_items
 
 
-def _extract_output_text(payload: dict[str, Any], *, profile: ResolvedLlmProviderProfile) -> str:
-    if profile.api_family == "chat_completions":
-        choices = payload.get("choices")
-        if isinstance(choices, list):
-            for item in choices:
-                if not isinstance(item, dict):
-                    continue
-                message = item.get("message")
-                if not isinstance(message, dict):
-                    continue
-                content = message.get("content")
-                if isinstance(content, str) and content.strip():
-                    return content.strip()
-        return ""
-
-    output_text = payload.get("output_text")
-    if isinstance(output_text, str) and output_text.strip():
-        return output_text.strip()
-
-    output = payload.get("output", [])
-    if isinstance(output, list):
-        chunks: list[str] = []
-        for item in output:
-            if item.get("type") != "message":
-                continue
-            for content_item in item.get("content", []):
-                if content_item.get("type") == "output_text":
-                    text_value = content_item.get("text", "")
-                    if isinstance(text_value, str) and text_value.strip():
-                        chunks.append(text_value.strip())
-        if chunks:
-            return "\n".join(chunks).strip()
-    return ""
-
-
-def _extract_generated_images(payload: dict[str, Any], *, profile: ResolvedLlmProviderProfile) -> list[GeneratedImagePayload]:
-    if profile.api_family == "chat_completions":
-        return []
-
+def _extract_generated_images(payload: dict[str, Any]) -> list[GeneratedImagePayload]:
     output = payload.get("output", [])
     if not isinstance(output, list):
         return []
@@ -343,24 +312,6 @@ def _extract_generated_images(payload: dict[str, Any], *, profile: ResolvedLlmPr
         if isinstance(result, str) and result:
             images.append(GeneratedImagePayload(base64_data=result))
     return images
-
-
-def _extract_error_detail(response: httpx.Response) -> str:
-    try:
-        payload = response.json()
-    except ValueError:
-        return response.text or f"status {response.status_code}"
-
-    if isinstance(payload, dict):
-        error = payload.get("error")
-        if isinstance(error, dict):
-            message = error.get("message")
-            if isinstance(message, str) and message.strip():
-                return message.strip()
-        detail = payload.get("detail")
-        if isinstance(detail, str) and detail.strip():
-            return detail.strip()
-    return response.text or f"status {response.status_code}"
 
 
 def _extract_incomplete_response_error(payload: dict[str, Any]) -> str | None:
@@ -380,22 +331,33 @@ def _extract_incomplete_response_error(payload: dict[str, Any]) -> str | None:
     return "LLM provider response was incomplete."
 
 
-def _map_provider_status_code(status_code: int) -> int:
-    if status_code in {408, 504}:
+def _map_gateway_error_status_code(error: TransformerLlmError) -> int:
+    if error.status_code is not None:
+        return error.status_code
+
+    code = error.code.strip().casefold()
+    if "timeout" in code:
         return 504
-    if status_code == 429:
-        return 503
     return 502
+
+
+def _build_gateway_error_message(
+    error: TransformerLlmError,
+    *,
+    profile: ResolvedLlmProviderProfile,
+) -> str:
+    if error.status_code is not None:
+        return error.message
+
+    code = error.code.strip().casefold()
+    if "timeout" in code:
+        return f"LLM provider timed out after {profile.request_timeout_seconds:g} seconds."
+    return f"LLM provider request failed before a response was received: {error.message}"
 
 
 def _wants_image_generation(prompt: str) -> bool:
     normalized = prompt.casefold()
     return any(keyword in normalized for keyword in IMAGE_GENERATION_KEYWORDS)
-
-
-def _wants_web_search(prompt: str) -> bool:
-    normalized = prompt.casefold()
-    return any(keyword in normalized for keyword in WEB_SEARCH_KEYWORDS)
 
 
 def _supports_openai_image_generation(model: str) -> bool:
@@ -406,15 +368,15 @@ def _resolve_max_output_tokens(
     *,
     profile: ResolvedLlmProviderProfile,
     document_attachments: list[AttachmentReference],
-    wants_image_generation: bool,
-    wants_web_search: bool,
+    use_image_generation: bool,
+    use_web_search: bool,
     requested_max_output_tokens: int,
 ) -> int:
     tools = _build_tools(
         profile=profile,
         document_attachments=document_attachments,
-        wants_image_generation=wants_image_generation,
-        wants_web_search=wants_web_search,
+        use_image_generation=use_image_generation,
+        use_web_search=use_web_search,
     )
     if profile.provider == "openai" and any(tool.get("type") == "web_search" for tool in tools):
         return max(requested_max_output_tokens, OPENAI_WEB_SEARCH_MIN_OUTPUT_TOKENS)
@@ -440,5 +402,6 @@ def _resolve_base_url(endpoint_url: str | None, provider: str) -> str:
     defaults = {
         "openai": "https://api.openai.com/v1",
         "xai": "https://api.x.ai/v1",
+        "azure_openai": "https://api.openai.com/v1",
     }
     return defaults.get(provider.strip().casefold(), "https://api.openai.com/v1")

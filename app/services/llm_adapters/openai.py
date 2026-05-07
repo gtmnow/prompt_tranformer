@@ -138,9 +138,21 @@ class OpenAIAdapter(BaseLlmAdapter):
             profile.token_parameter: request.max_output_tokens,
             "store": False,
         }
+        if request.text_format is not None:
+            payload["text"] = request.text_format
+        if request.tools:
+            payload["tools"] = request.tools
+        if request.tool_choice is not None:
+            payload["tool_choice"] = request.tool_choice
         return payload
 
     def _build_messages(self, request: TransformerLlmRequest, profile: ResolvedLlmProviderProfile) -> list[dict[str, str]]:
+        if request.conversation_messages:
+            return [
+                item
+                for item in request.conversation_messages
+                if isinstance(item, dict)
+            ]
         messages: list[dict[str, str]] = []
         if profile.supports_system_prompt and request.system_prompt.strip():
             messages.append({"role": "system", "content": request.system_prompt})
@@ -152,6 +164,12 @@ class OpenAIAdapter(BaseLlmAdapter):
         request: TransformerLlmRequest,
         profile: ResolvedLlmProviderProfile,
     ) -> list[dict[str, Any]]:
+        if request.input_items:
+            return [
+                item
+                for item in request.input_items
+                if isinstance(item, dict)
+            ]
         items: list[dict[str, Any]] = []
         if profile.supports_system_prompt and request.system_prompt.strip():
             items.append(

@@ -1,6 +1,8 @@
 import httpx
 
 from app.services.llm_adapters.openai import OpenAIAdapter
+from app.services.llm_provider_profiles import ResolvedLlmProviderProfile
+from app.services.llm_types import TransformerLlmRequest
 
 
 def _build_response(status_code: int, payload: dict) -> httpx.Response:
@@ -51,3 +53,40 @@ def test_openai_adapter_does_not_retry_for_other_bad_requests() -> None:
         )
         is False
     )
+
+
+def test_openai_adapter_uses_structured_input_over_prompt_fields() -> None:
+    adapter = OpenAIAdapter()
+    profile = ResolvedLlmProviderProfile(
+        provider="openai",
+        requested_model="gpt-4.1",
+        resolved_model="gpt-4.1",
+        api_family="responses",
+        endpoint_path="/responses",
+        auth_scheme="bearer",
+        auth_header_name=None,
+        version_header_name=None,
+        version_header_value=None,
+        json_mode="prompt_only",
+        token_parameter="max_output_tokens",
+        supports_system_prompt=True,
+        request_timeout_seconds=15.0,
+        raw={},
+    )
+    request = TransformerLlmRequest(
+        provider="openai",
+        model="gpt-4.1",
+        base_url="https://api.openai.com/v1",
+        api_key="test-key",
+        system_prompt="ignored system",
+        user_prompt="ignored prompt",
+        input_items=[{"role": "user", "content": [{"type": "input_text", "text": "structured"}]}],
+        tools=[{"type": "web_search"}],
+        text_format={"format": {"type": "text"}},
+    )
+
+    payload = adapter._build_payload(request, profile)  # type: ignore[attr-defined]
+
+    assert payload["input"] == request.input_items
+    assert payload["tools"] == [{"type": "web_search"}]
+    assert payload["text"] == {"format": {"type": "text"}}

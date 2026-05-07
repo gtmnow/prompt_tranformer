@@ -19,7 +19,7 @@ from app.schemas.transform import (
     TransformPromptResponse,
 )
 from app.services.compliance_checks import ComplianceCheckService
-from app.services.final_response_service import FinalResponseService
+from app.services.final_response_service import FinalResponseService, resolve_final_response_intent
 from app.services.guide_me_generation import GuideMeGenerationService
 from app.services.llm_policy import LLMPolicyService
 from app.services.pii_checks import PIICheckService
@@ -359,10 +359,13 @@ class TransformerEngine:
             )
             assistant_result = self.final_response_service.generate(
                 runtime_config=runtime_llm,
-                resolved_model=runtime_llm.model,
                 transformed_prompt=payload.raw_prompt,
                 conversation_history=payload.conversation_history,
                 attachments=payload.attachments,
+                intent=resolve_final_response_intent(
+                    raw_prompt=payload.raw_prompt,
+                    transformed_prompt=payload.raw_prompt,
+                ),
                 reference_context=self._build_reference_context_for_prompt(
                     tenant_id=runtime_llm.tenant_id,
                     conversation_id=payload.conversation_id,
@@ -460,10 +463,13 @@ class TransformerEngine:
         final_response_started_at = time.perf_counter()
         assistant_result = self.final_response_service.generate(
             runtime_config=runtime_llm,
-            resolved_model=runtime_llm.model,
             transformed_prompt=transform_response.transformed_prompt or payload.raw_prompt,
             conversation_history=payload.conversation_history,
             attachments=payload.attachments,
+            intent=resolve_final_response_intent(
+                raw_prompt=payload.raw_prompt,
+                transformed_prompt=transform_response.transformed_prompt or payload.raw_prompt,
+            ),
             reference_context=reference_context,
         )
         transform_response.metadata.final_response_latency_ms = (

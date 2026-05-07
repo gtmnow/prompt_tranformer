@@ -496,7 +496,7 @@ def test_execute_chat_keeps_runtime_xai_model_and_reports_retrieval_metadata(cli
                 document_count=1,
             ),
         ),
-        patch("app.services.final_response_service.httpx.Client") as httpx_client,
+        patch("app.services.llm_adapters.openai.httpx.Client") as httpx_client,
     ):
         mock_client = httpx_client.return_value.__enter__.return_value
         mock_client.post.return_value.status_code = 200
@@ -535,10 +535,10 @@ def test_execute_chat_keeps_runtime_xai_model_and_reports_retrieval_metadata(cli
     assert body["metadata"]["retrieval_document_count"] == 1
 
     request_json = mock_client.post.call_args.kwargs["json"]
-    assert request_json["model"] == "grok-3-mini"
+    assert request_json["model"] == "grok-3"
     assert "input" in request_json
     assert "messages" not in request_json
-    assert request_json["tools"] == [{"type": "web_search"}]
+    assert "tools" not in request_json
 
 
 def test_execute_chat_returns_504_when_final_response_provider_times_out(client) -> None:
@@ -558,7 +558,7 @@ def test_execute_chat_returns_504_when_final_response_provider_times_out(client)
                 document_count=0,
             ),
         ),
-        patch("app.services.final_response_service.httpx.Client") as httpx_client,
+        patch("app.services.llm_adapters.openai.httpx.Client") as httpx_client,
     ):
         mock_client = httpx_client.return_value.__enter__.return_value
         mock_client.post.side_effect = httpx.ReadTimeout(
@@ -996,7 +996,7 @@ def test_execute_chat_continues_when_retrieval_event_logging_fails(client) -> No
             "app.services.rag_retrieval_service.RagRetrievalService._persist_retrieval_events",
             side_effect=SQLAlchemyError("rag analytics write failed"),
         ),
-        patch("app.services.final_response_service.httpx.Client") as httpx_client,
+        patch("app.services.llm_adapters.openai.httpx.Client") as httpx_client,
     ):
         mock_client = httpx_client.return_value.__enter__.return_value
         mock_client.post.return_value.status_code = 200
@@ -1035,6 +1035,54 @@ def test_execute_chat_continues_when_retrieval_event_logging_fails(client) -> No
     assert body["metadata"]["retrieval_used"] is True
     assert body["metadata"]["retrieval_scope_counts"]["user"] == 1
     assert body["metadata"]["retrieval_document_count"] == 1
+    request_json = mock_client.post.call_args.kwargs["json"]
+    assert request_json["tools"] == [{"type": "web_search"}]
+
+
+def test_execute_chat_preserves_provider_bad_request_status_for_actionable_failures(client) -> None:
+    _seed_final_profiles(client)
+
+    with (
+        patch(
+            "app.services.transformer_engine.RuntimeLlmResolver.resolve",
+            return_value=_runtime_config(),
+        ),
+        patch(
+            "app.services.transformer_engine.RagRetrievalService.retrieve",
+            return_value=RagRetrievalResult(
+                assembled_references=[],
+                tenant_chunk_count=0,
+                user_chunk_count=0,
+                document_count=0,
+            ),
+        ),
+        patch("app.services.llm_adapters.openai.httpx.Client") as httpx_client,
+    ):
+        mock_client = httpx_client.return_value.__enter__.return_value
+        bad_request = httpx.Response(
+            status_code=400,
+            json={"error": {"message": "Unsupported tool payload."}},
+            request=httpx.Request("POST", "https://api.openai.com/v1/responses"),
+        )
+        mock_client.post.return_value = bad_request
+
+        response = client.post(
+            "/api/chat/execute",
+            headers=AUTH_HEADERS,
+            json={
+                "session_id": "sess_bad_request",
+                "conversation_id": "conv_bad_request",
+                "user_id_hash": "user_1",
+                "raw_prompt": "Find the latest product announcement.",
+                "target_llm": {"provider": "openai", "model": "gpt-4.1"},
+                "conversation_history": [],
+                "attachments": [],
+                "transform_enabled": True,
+            },
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Unsupported tool payload."
 
 
 def test_execute_chat_reports_user_context_disabled_reason_when_personal_toggle_is_off(client) -> None:
@@ -1096,7 +1144,7 @@ def test_execute_chat_reports_user_context_disabled_reason_when_personal_toggle_
                 endpoint_url="https://api.x.ai/v1",
             ),
         ),
-        patch("app.services.final_response_service.httpx.Client") as httpx_client,
+        patch("app.services.llm_adapters.openai.httpx.Client") as httpx_client,
     ):
         mock_client = httpx_client.return_value.__enter__.return_value
         mock_client.post.return_value.status_code = 200
@@ -1141,7 +1189,7 @@ def test_execute_chat_skips_retrieval_for_short_queries_and_reports_reason(clien
             return_value=_runtime_config(),
         ),
         patch("app.services.transformer_engine.RagRetrievalService.retrieve") as retrieve_mock,
-        patch("app.services.final_response_service.httpx.Client") as httpx_client,
+        patch("app.services.llm_adapters.openai.httpx.Client") as httpx_client,
     ):
         mock_client = httpx_client.return_value.__enter__.return_value
         mock_client.post.return_value.status_code = 200

@@ -4,7 +4,12 @@ import unittest
 from unittest.mock import patch
 
 from app.schemas.transform import AttachmentReference, ConversationHistoryTurn
-from app.services.final_response_service import _build_openai_like_payload, _extract_output_text
+from app.services.final_response_service import (
+    OPENAI_WEB_SEARCH_MIN_OUTPUT_TOKENS,
+    _build_openai_like_payload,
+    _extract_incomplete_response_error,
+    _extract_output_text,
+)
 from app.services.rag_prompt_assembly_service import RagPromptAssemblyService
 from app.services.llm_provider_profiles import ResolvedLlmProviderProfile
 
@@ -104,6 +109,7 @@ class FinalResponseServiceTests(unittest.TestCase):
 
         self.assertIn("tools", payload)
         self.assertIn({"type": "web_search"}, payload["tools"])
+        self.assertEqual(payload["max_output_tokens"], OPENAI_WEB_SEARCH_MIN_OUTPUT_TOKENS)
 
     def test_build_openai_like_payload_keeps_web_search_available_with_documents(self) -> None:
         payload = _build_openai_like_payload(
@@ -128,6 +134,7 @@ class FinalResponseServiceTests(unittest.TestCase):
         self.assertIn({"type": "web_search"}, payload["tools"])
         self.assertEqual(payload["tools"][1]["type"], "code_interpreter")
         self.assertNotIn("tool_choice", payload)
+        self.assertEqual(payload["max_output_tokens"], OPENAI_WEB_SEARCH_MIN_OUTPUT_TOKENS)
 
     def test_build_openai_like_payload_xai_responses_uses_web_search_without_openai_only_tools(self) -> None:
         xai_profile = ResolvedLlmProviderProfile(
@@ -168,6 +175,21 @@ class FinalResponseServiceTests(unittest.TestCase):
         self.assertEqual(payload["tools"], [{"type": "web_search"}])
         self.assertIn("input", payload)
         self.assertNotIn("messages", payload)
+        self.assertEqual(payload["max_output_tokens"], 800)
+
+    def test_extract_incomplete_response_error_reports_max_tokens_reason(self) -> None:
+        error = _extract_incomplete_response_error(
+            {
+                "status": "incomplete",
+                "incomplete_details": {"reason": "max_tokens"},
+                "output": [],
+            }
+        )
+
+        self.assertEqual(
+            error,
+            "LLM provider response was incomplete because it hit the max_output_tokens limit.",
+        )
 
     def test_rag_prompt_assembly_compresses_and_budgets_reference_context(self) -> None:
         service = RagPromptAssemblyService()

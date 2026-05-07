@@ -36,6 +36,7 @@ OPENAI_IMAGE_GENERATION_MODELS = {
     "gpt-5",
     "gpt-image-1",
 }
+OPENAI_WEB_SEARCH_MIN_OUTPUT_TOKENS = 1200
 
 
 @dataclass(frozen=True)
@@ -132,6 +133,9 @@ class FinalResponseService:
             )
 
         data = response.json()
+        incomplete_error = _extract_incomplete_response_error(data)
+        if incomplete_error:
+            raise ValueError(incomplete_error)
         text = _extract_output_text(data, profile=profile)
         generated_images = _extract_generated_images(data, profile=profile)
         if not text and generated_images:
@@ -178,7 +182,12 @@ def _build_openai_like_payload(
             transformed_prompt=transformed_prompt,
             image_attachments=image_attachments,
         ),
-        profile.token_parameter: max_output_tokens,
+        profile.token_parameter: _resolve_max_output_tokens(
+            profile=profile,
+            document_attachments=document_attachments,
+            wants_image_generation=wants_image_generation,
+            requested_max_output_tokens=max_output_tokens,
+        ),
         "store": False,
     }
 
@@ -333,6 +342,23 @@ def _extract_error_detail(response: httpx.Response) -> str:
     return response.text or f"status {response.status_code}"
 
 
+def _extract_incomplete_response_error(payload: dict[str, Any]) -> str | None:
+    status = payload.get("status")
+    if status != "incomplete":
+        return None
+
+    incomplete_details = payload.get("incomplete_details")
+    if isinstance(incomplete_details, dict):
+        reason = incomplete_details.get("reason")
+        if isinstance(reason, str) and reason.strip():
+            normalized_reason = reason.strip()
+            if normalized_reason == "max_tokens":
+                return "LLM provider response was incomplete because it hit the max_output_tokens limit."
+            return f"LLM provider response was incomplete: {normalized_reason}."
+
+    return "LLM provider response was incomplete."
+
+
 def _map_provider_status_code(status_code: int) -> int:
     if status_code in {408, 504}:
         return 504
@@ -348,6 +374,23 @@ def _wants_image_generation(prompt: str) -> bool:
 
 def _supports_openai_image_generation(model: str) -> bool:
     return model.strip().casefold() in OPENAI_IMAGE_GENERATION_MODELS
+
+
+def _resolve_max_output_tokens(
+    *,
+    profile: ResolvedLlmProviderProfile,
+    document_attachments: list[AttachmentReference],
+    wants_image_generation: bool,
+    requested_max_output_tokens: int,
+) -> int:
+    tools = _build_tools(
+        profile=profile,
+        document_attachments=document_attachments,
+        wants_image_generation=wants_image_generation,
+    )
+    if profile.provider == "openai" and any(tool.get("type") == "web_search" for tool in tools):
+        return max(requested_max_output_tokens, OPENAI_WEB_SEARCH_MIN_OUTPUT_TOKENS)
+    return requested_max_output_tokens
 
 
 def _supports_code_interpreter(provider: str) -> bool:

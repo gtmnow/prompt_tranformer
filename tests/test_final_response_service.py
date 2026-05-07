@@ -289,6 +289,20 @@ class FinalResponseServiceTests(unittest.TestCase):
             "LLM provider response was incomplete because it hit the max_output_tokens limit.",
         )
 
+    def test_extract_incomplete_response_error_reports_max_output_tokens_reason(self) -> None:
+        error = _extract_incomplete_response_error(
+            {
+                "status": "incomplete",
+                "incomplete_details": {"reason": "max_output_tokens"},
+                "output": [],
+            }
+        )
+
+        self.assertEqual(
+            error,
+            "LLM provider response was incomplete because it hit the max_output_tokens limit.",
+        )
+
     def test_extract_generated_images_preserves_media_type(self) -> None:
         images = _extract_generated_images(
             {

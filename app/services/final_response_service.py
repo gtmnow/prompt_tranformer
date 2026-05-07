@@ -401,7 +401,8 @@ def _extract_incomplete_response_error(payload: dict[str, Any]) -> str | None:
         reason = incomplete_details.get("reason")
         if isinstance(reason, str) and reason.strip():
             normalized_reason = reason.strip()
-            if normalized_reason == "max_tokens":
+            normalized_reason_lower = normalized_reason.casefold().replace("-", "_")
+            if normalized_reason_lower in {"max_tokens", "max_output_tokens", "max_output_token"}:
                 return "LLM provider response was incomplete because it hit the max_output_tokens limit."
             return f"LLM provider response was incomplete: {normalized_reason}."
 

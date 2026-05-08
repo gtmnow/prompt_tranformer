@@ -18,6 +18,7 @@ from app.services.final_response_service import (
 from app.services.llm_provider_profiles import ResolvedLlmProviderProfile
 from app.services.llm_provider_profiles import LlmProviderProfileService
 from app.services.rag_prompt_assembly_service import RagPromptAssemblyService
+from app.core.config import get_settings
 from app.services.runtime_llm import RuntimeLlmConfig
 from app.services.llm_types import TransformerLlmResponse
 
@@ -201,7 +202,7 @@ class FinalResponseServiceTests(unittest.TestCase):
         actual_request = invoke_mock.call_args.args[0]
         self.assertEqual(
             actual_request.user_prompt,
-            _append_max_output_budget("Summarize the policy briefly.", 600),
+            _append_max_output_budget("Summarize the policy briefly.", get_settings().final_response_max_output_tokens),
         )
 
     def test_append_max_output_budget_directive(self) -> None:

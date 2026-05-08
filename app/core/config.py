@@ -54,7 +54,7 @@ class Settings(BaseSettings):
     reference_context_max_sources: int = 3
     reference_context_max_words: int = 220
     reference_context_max_words_per_source: int = 80
-    final_response_max_output_tokens: int = 600
+    final_response_max_output_tokens: int = 1000
 
     model_config = SettingsConfigDict(
         env_file=".env",

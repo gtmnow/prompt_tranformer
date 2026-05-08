@@ -15,21 +15,55 @@ providers:
     auth_scheme: bearer
     json_mode: prompt_only
     token_parameter: max_output_tokens
+    supports_image_generation: false
     supports_web_search: true
     models:
       gpt-4.1:
         api_family: responses
         token_parameter: max_output_tokens
+        supports_image_generation: true
       gpt-4.1-mini:
         api_family: responses
         token_parameter: max_output_tokens
+        supports_image_generation: true
+      gpt-4o:
+        api_family: responses
+        token_parameter: max_output_tokens
+        supports_image_generation: true
+        supports_web_search: true
+      gpt-4o-mini:
+        api_family: responses
+        token_parameter: max_output_tokens
+        supports_image_generation: true
+        supports_web_search: true
       gpt-5.4:
         api_family: responses
         token_parameter: max_output_tokens
+        supports_image_generation: true
         supports_web_search: true
+        supports_temperature: false
       gpt-5.4-mini:
         api_family: responses
         token_parameter: max_output_tokens
+        supports_image_generation: true
+        supports_web_search: true
+        supports_temperature: false
+      gpt-5.5:
+        api_family: responses
+        token_parameter: max_output_tokens
+        supports_image_generation: true
+        supports_web_search: true
+        supports_temperature: false
+      gpt-5:
+        api_family: responses
+        token_parameter: max_output_tokens
+        supports_image_generation: true
+        supports_web_search: true
+        supports_temperature: false
+      gpt-image-1:
+        api_family: responses
+        token_parameter: max_output_tokens
+        supports_image_generation: true
         supports_web_search: true
 
   xai:
@@ -60,24 +94,37 @@ providers:
     auth_header_name: api-key
     json_mode: prompt_only
     token_parameter: max_output_tokens
+    supports_image_generation: false
     supports_web_search: true
     models:
       gpt-4.1:
         api_family: responses
         token_parameter: max_output_tokens
+        supports_image_generation: true
         supports_web_search: true
       gpt-4.1-mini:
         api_family: responses
         token_parameter: max_output_tokens
+        supports_image_generation: true
         supports_web_search: true
       gpt-5.4:
         api_family: responses
         token_parameter: max_output_tokens
+        supports_image_generation: true
         supports_web_search: true
+        supports_temperature: false
       gpt-5.4-mini:
         api_family: responses
         token_parameter: max_output_tokens
+        supports_image_generation: true
         supports_web_search: true
+        supports_temperature: false
+      gpt-5.5:
+        api_family: responses
+        token_parameter: max_output_tokens
+        supports_image_generation: true
+        supports_web_search: true
+        supports_temperature: false
 
   anthropic:
     default_model: claude-haiku-4-5

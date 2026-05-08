@@ -13,6 +13,34 @@ from app.services.token_usage import normalize_usage
 class OpenAIAdapter(BaseLlmAdapter):
     provider_name = "openai"
 
+    def discover_models(self, *, base_url: str, api_key: str) -> set[str]:
+        normalized_base_url = base_url.strip().rstrip("/")
+        if not normalized_base_url or not api_key:
+            return set()
+
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        }
+        url = f"{normalized_base_url}/models"
+        with httpx.Client(timeout=15.0) as client:
+            response = client.get(url, headers=headers)
+            response.raise_for_status()
+            payload = response.json()
+
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(data, list):
+            return set()
+
+        discovered: set[str] = set()
+        for model_item in data:
+            if not isinstance(model_item, dict):
+                continue
+            model_name = model_item.get("id")
+            if isinstance(model_name, str) and model_name.strip():
+                discovered.add(model_name.strip())
+        return discovered
+
     def invoke(
         self,
         request: TransformerLlmRequest,

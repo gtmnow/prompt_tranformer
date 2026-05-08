@@ -12,6 +12,7 @@ from app.core.config import get_settings
 from app.core.logging import configure_application_logging
 from app.core.rules import get_rule_registry
 from app.services.llm_provider_profiles import LlmProviderProfileService
+from app.services.llm_model_catalog import LlmModelCatalogService
 from app.db.session import engine
 from app.schema_contract import SchemaContractError, validate_schema_contract
 
@@ -35,6 +36,8 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
                 exc_info=True,
             )
     profile_service = LlmProviderProfileService()
+    LlmModelCatalogService().discover_and_register()
+
     for provider in profile_service.list_supported_providers():
         logger.info(
             "LLM model whitelist loaded for provider '%s': %s",

@@ -18,9 +18,6 @@ logger = logging.getLogger("prompt_transformer.final_response_service")
 DOCUMENT_KINDS = {"document"}
 IMAGE_KINDS = {"image"}
 IMAGE_GENERATION_KEYWORDS = {
-    "generate image",
-    "create image",
-    "make image",
     "draw",
     "redraw",
     "illustrate",
@@ -64,6 +61,9 @@ OPENAI_IMAGE_GENERATION_MODELS = {
     "gpt-4o",
     "gpt-4o-mini",
     "gpt-5",
+    "gpt-5.4",
+    "gpt-5.4-mini",
+    "gpt-5.5",
     "gpt-image-1",
 }
 OPENAI_WEB_SEARCH_MIN_OUTPUT_TOKENS = 4000
@@ -222,7 +222,7 @@ class FinalResponseService:
         image_attachments = [attachment for attachment in attachments if attachment.kind in IMAGE_KINDS]
         resolved_model = profile.resolved_model
 
-        if intent.use_image_generation and not _supports_openai_image_generation(resolved_model):
+        if intent.use_image_generation and not _supports_image_generation(profile):
             raise ValueError("Image generation is not supported with the resolved model.")
 
         return TransformerLlmRequest(
@@ -261,7 +261,7 @@ class FinalResponseService:
                 use_web_search=intent.use_web_search,
                 requested_max_output_tokens=runtime_config_output_tokens(runtime_config),
             ),
-            temperature=0.2 if _supports_temperature_parameter(resolved_model) else 0.0,
+            temperature=0.2 if _supports_temperature_parameter(profile) else 0.0,
             expected_output="text",
         )
 
@@ -352,7 +352,7 @@ def _build_tools(
                 }
             )
 
-    if use_image_generation and _supports_image_generation_tool(profile.provider):
+    if use_image_generation and _supports_image_generation_tool(profile=profile):
         tools.append({"type": "image_generation", "quality": "high"})
 
     return tools
@@ -537,11 +537,36 @@ def _build_gateway_error_message(
 
 def _wants_image_generation(prompt: str) -> bool:
     normalized = prompt.casefold()
+    if _contains_generate_image_intent(normalized):
+        return True
     return any(keyword in normalized for keyword in IMAGE_GENERATION_KEYWORDS)
 
 
-def _supports_openai_image_generation(model: str) -> bool:
-    return model.strip().casefold() in OPENAI_IMAGE_GENERATION_MODELS
+def _contains_generate_image_intent(normalized_prompt: str) -> bool:
+    return any(
+        pattern in normalized_prompt
+        for pattern in (
+            "generate image",
+            "generate an image",
+            "generate a image",
+            "create image",
+            "create an image",
+            "create a image",
+            "make image",
+            "make an image",
+            "make a image",
+            "draw me",
+            "draw a",
+            "convert this into",
+            "turn this into",
+        )
+    )
+
+
+def _supports_image_generation(profile: ResolvedLlmProviderProfile) -> bool:
+    if profile.supports_image_generation:
+        return True
+    return profile.resolved_model.strip().casefold() in OPENAI_IMAGE_GENERATION_MODELS
 
 
 def _supports_web_search(profile: ResolvedLlmProviderProfile) -> bool:
@@ -571,12 +596,14 @@ def _supports_code_interpreter(provider: str) -> bool:
     return provider.strip().casefold() in {"openai", "azure_openai"}
 
 
-def _supports_image_generation_tool(provider: str) -> bool:
-    return provider.strip().casefold() in {"openai", "azure_openai"}
+def _supports_image_generation_tool(profile: ResolvedLlmProviderProfile) -> bool:
+    return profile.provider.strip().casefold() in {"openai", "azure_openai"}
 
 
-def _supports_temperature_parameter(model: str) -> bool:
-    return not model.strip().casefold().startswith("gpt-5")
+def _supports_temperature_parameter(profile: ResolvedLlmProviderProfile) -> bool:
+    if profile.supports_temperature is not None:
+        return profile.supports_temperature
+    return not profile.resolved_model.strip().casefold().startswith("gpt-5")
 
 
 def _resolve_base_url(endpoint_url: str | None, provider: str) -> str:

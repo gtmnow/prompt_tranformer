@@ -42,6 +42,10 @@ class Settings(BaseSettings):
         default="",
         validation_alias=AliasChoices("STRUCTURE_EVALUATOR_API_KEY", "OPENAI_API_KEY"),
     )
+    openai_api_key: str = Field(default="", validation_alias=AliasChoices("OPENAI_API_KEY"))
+    xai_api_key: str = Field(default="", validation_alias=AliasChoices("XAI_API_KEY"))
+    azure_openai_api_key: str = Field(default="", validation_alias=AliasChoices("AZURE_OPENAI_API_KEY"))
+    anthropic_api_key: str = Field(default="", validation_alias=AliasChoices("ANTHROPIC_API_KEY"))
     structure_evaluator_base_url: str = "https://api.openai.com/v1"
     structure_evaluator_model: str = "gpt-4.1-mini"
     structure_evaluator_timeout_seconds: float = 15.0

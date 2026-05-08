@@ -47,3 +47,15 @@ def test_resolve_default_model_falls_back_when_default_is_not_available() -> Non
     default_model = service.resolve_default_model("xai")
 
     assert default_model == "grok-4-1"
+
+
+def test_resolve_catalog_discovered_model() -> None:
+    service = LlmProviderProfileService()
+
+    LlmProviderProfileService.register_discovered_models("openai", {"gpt-5.6"})
+    resolved = service.resolve("openai", "gpt-5.6")
+
+    assert resolved.requested_model == "gpt-5.6"
+    assert resolved.resolved_model == "gpt-5.6"
+    assert resolved.model_is_malformed is False
+    assert resolved.used_fallback_model is False

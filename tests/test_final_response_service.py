@@ -26,6 +26,10 @@ from app.services.llm_types import TransformerLlmResponse
 def _profile(
     *,
     provider: str = "openai",
+    requested_model: str = "test-model",
+    resolved_model: str = "test-model",
+    supports_image_generation: bool = False,
+    supports_temperature: bool | None = None,
     api_family: str,
     token_parameter: str,
     supports_web_search: bool = False,
@@ -33,8 +37,8 @@ def _profile(
 ) -> ResolvedLlmProviderProfile:
     return ResolvedLlmProviderProfile(
         provider=provider,
-        requested_model="test-model",
-        resolved_model="test-model",
+        requested_model=requested_model,
+        resolved_model=resolved_model,
         api_family=api_family,
         endpoint_path="/chat/completions" if api_family == "chat_completions" else "/responses",
         auth_scheme="bearer",
@@ -44,6 +48,8 @@ def _profile(
         json_mode="prompt_only",
         token_parameter=token_parameter,
         supports_system_prompt=True,
+        supports_image_generation=supports_image_generation,
+        supports_temperature=supports_temperature,
         request_timeout_seconds=15.0,
         supports_web_search=supports_web_search,
         raw=raw or {},
@@ -154,6 +160,17 @@ class FinalResponseServiceTests(unittest.TestCase):
             FinalResponseIntent(use_web_search=True, use_image_generation=False),
         )
 
+    def test_resolve_final_response_intent_detects_image_prompt(self) -> None:
+        intent = resolve_final_response_intent(
+            raw_prompt="Generate an image of a dog.",
+            transformed_prompt="Create a warm, friendly mascot-style rendering.",
+        )
+
+        self.assertEqual(
+            intent,
+            FinalResponseIntent(use_web_search=False, use_image_generation=True),
+        )
+
     def test_resolve_final_response_intent_false_overrides_keywords(self) -> None:
         intent = resolve_final_response_intent(
             raw_prompt="What are today's top trends in candidate sourcing?",
@@ -204,6 +221,31 @@ class FinalResponseServiceTests(unittest.TestCase):
             actual_request.user_prompt,
             _append_max_output_budget("Summarize the policy briefly.", get_settings().final_response_max_output_tokens),
         )
+
+    def test_build_request_allows_gpt_5_5_image_generation_phrase(self) -> None:
+        from app.services.final_response_service import FinalResponseService
+
+        service = FinalResponseService()
+        profile = _profile(
+            provider="openai",
+            resolved_model="gpt-5.5",
+            api_family="responses",
+            token_parameter="max_output_tokens",
+            supports_web_search=True,
+            supports_image_generation=False,
+        )
+
+        with patch.object(service.provider_profiles, "resolve", return_value=profile):
+            request = service._build_request(
+                runtime_config=_runtime_config(provider="openai", model="gpt-5.5"),
+                transformed_prompt="Generate an image of a dog.",
+                conversation_history=[],
+                attachments=[],
+                intent=FinalResponseIntent(use_web_search=False, use_image_generation=True),
+                profile=profile,
+            )
+
+        self.assertEqual(request.tools, [{"type": "image_generation", "quality": "high"}])
 
     def test_append_max_output_budget_directive(self) -> None:
         self.assertIn(

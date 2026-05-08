@@ -27,6 +27,8 @@ class ResolvedLlmProviderProfile:
     token_parameter: str
     supports_system_prompt: bool
     request_timeout_seconds: float
+    supports_image_generation: bool = False
+    supports_temperature: bool | None = None
     raw: dict[str, Any] = field(default_factory=dict)
     model_is_malformed: bool = False
     used_fallback_model: bool = False
@@ -34,8 +36,21 @@ class ResolvedLlmProviderProfile:
 
 
 class LlmProviderProfileService:
+    _discovered_models: dict[str, set[str]] = {}
+
     def __init__(self) -> None:
         self.rules = get_rule_registry().llm_provider_profiles
+
+    @classmethod
+    def register_discovered_models(
+        cls,
+        provider: str,
+        discovered_models: set[str],
+    ) -> None:
+        normalized_provider = provider.strip().casefold()
+        cls._discovered_models[normalized_provider] = {
+            str(model).strip() for model in discovered_models if str(model).strip()
+        }
 
     def resolve(self, provider: str, model: str) -> ResolvedLlmProviderProfile:
         normalized_provider = self._normalize_provider(provider)
@@ -45,9 +60,12 @@ class LlmProviderProfileService:
         if not provider_profile:
             raise ValueError(f"Unsupported provider profile: {provider}")
 
+        provider_profile = dict(provider_profile)
         models = provider_profile.get("models", {})
         if not isinstance(models, dict):
             models = {}
+        discovered_models = self._discovered_models.get(normalized_provider, set())
+        models = {**models, **{model: {} for model in discovered_models if model not in models}}
 
         resolved_model, model_is_malformed, used_fallback_model = self._resolve_model(
             provider=normalized_provider,
@@ -76,6 +94,10 @@ class LlmProviderProfileService:
             json_mode=str(merged.get("json_mode") or default_profile.get("json_mode") or "prompt_only"),
             token_parameter=str(merged.get("token_parameter") or default_profile.get("token_parameter") or "max_output_tokens"),
             supports_system_prompt=bool(merged.get("supports_system_prompt", True)),
+            supports_image_generation=bool(merged.get("supports_image_generation", False)),
+            supports_temperature=None
+            if merged.get("supports_temperature") is None
+            else bool(merged.get("supports_temperature")),
             request_timeout_seconds=float(merged.get("request_timeout_seconds") or default_profile.get("request_timeout_seconds") or 15.0),
             supports_web_search=bool(merged.get("supports_web_search", False)),
             raw=merged,
@@ -93,6 +115,10 @@ class LlmProviderProfileService:
 
         models = provider_profile.get("models", {})
         if not isinstance(models, dict):
+            models = {}
+        discovered_models = self._discovered_models.get(normalized_provider, set())
+        models = {**models, **{model: {} for model in discovered_models if model not in models}}
+        if not isinstance(models, dict):
             return []
         return sorted(models.keys())
 
@@ -107,6 +133,8 @@ class LlmProviderProfileService:
         models = provider_profile.get("models", {})
         if not isinstance(models, dict):
             models = {}
+        discovered_models = self._discovered_models.get(normalized_provider, set())
+        models = {**models, **{model: {} for model in discovered_models if model not in models}}
 
         if not isinstance(default_model, str) or not default_model.strip():
             fallback_model = self._lowest_version_model(models.keys())

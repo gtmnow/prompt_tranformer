@@ -140,7 +140,6 @@ class FinalResponseService:
         )
         prompt_without_budget = final_prompt
         attempt_count = 0
-        image_generation_attempted = False
         response = None
         payload: dict[str, Any] = {}
         resolved_max_output_tokens_local = resolved_max_output_tokens
@@ -161,21 +160,6 @@ class FinalResponseService:
             )
             response, error = self.gateway.invoke(request)
             if error is not None:
-                if (
-                    current_intent.use_image_generation
-                    and not image_generation_attempted
-                    and _should_retry_image_request_as_text(error, profile)
-                ):
-                    image_generation_attempted = True
-                    current_intent = FinalResponseIntent(
-                        use_web_search=current_intent.use_web_search,
-                        use_image_generation=False,
-                    )
-                    logger.warning(
-                        "Image generation request timed out for model %s; retrying as text-only request.",
-                        profile.resolved_model,
-                    )
-                    continue
                 raise FinalResponseProviderError(
                     _build_gateway_error_message(error, profile=profile),
                     status_code=_map_gateway_error_status_code(error),
@@ -217,6 +201,21 @@ class FinalResponseService:
 
         text = response.output_text.strip()
         generated_images = _extract_generated_images(payload)
+        if current_intent.use_image_generation and not generated_images:
+            logger.warning(
+                "Image-generation request completed without image artifacts.",
+                extra={
+                    "provider": profile.provider,
+                    "resolved_model": profile.resolved_model,
+                    "requested_model": profile.requested_model,
+                    "output_keys": list(payload.keys()) if isinstance(payload, dict) else [],
+                },
+            )
+            raise FinalResponseProviderError(
+                "LLM provider returned no image artifacts for an image-generation request. "
+                "Verify the model supports image generation and image tool availability.",
+                status_code=502,
+            )
         if not text and generated_images:
             text = "Generated image attached."
         if not text and not generated_images:
@@ -396,32 +395,107 @@ def _build_input_items(
 
 def _extract_generated_images(payload: dict[str, Any]) -> list[GeneratedImagePayload]:
     output = payload.get("output", [])
-    if not isinstance(output, list):
+    return _collect_generated_images(node=output, inherited_media_type=None)
+
+
+def _collect_generated_images(
+    *,
+    node: Any,
+    inherited_media_type: str | None,
+    seen: set[str] | None = None,
+) -> list[GeneratedImagePayload]:
+    images: list[GeneratedImagePayload] = []
+    if seen is None:
+        seen = set()
+
+    if isinstance(node, list):
+        for child in node:
+            images.extend(
+                _collect_generated_images(
+                    node=child,
+                    inherited_media_type=inherited_media_type,
+                    seen=seen,
+                )
+            )
+        return images
+
+    if not isinstance(node, dict):
         return []
 
-    images: list[GeneratedImagePayload] = []
-    for item in output:
-        if item.get("type") != "image_generation_call":
-            continue
-        result = item.get("result")
-        if isinstance(result, str) and result:
-            images.append(GeneratedImagePayload(media_type="image/png", base64_data=result))
-            continue
-        if not isinstance(result, dict):
-            continue
-        base64_data, media_type = _extract_image_result(result)
-        if not base64_data:
-            continue
-        images.append(
-            GeneratedImagePayload(
-                media_type=media_type if media_type else "image/png",
-                base64_data=base64_data,
+    media_type = _extract_media_type(node) or inherited_media_type
+    base64_data, media_type_from_node = _extract_image_data_from_node(
+        node=node,
+        inherited_media_type=media_type,
+    )
+    if base64_data:
+        if base64_data not in seen:
+            seen.add(base64_data)
+            images.append(
+                GeneratedImagePayload(
+                    media_type=media_type_from_node if media_type_from_node else "image/png",
+                    base64_data=base64_data,
+                )
+            )
+
+    for value in node.values():
+        images.extend(
+            _collect_generated_images(
+                node=value,
+                inherited_media_type=media_type,
+                seen=seen,
             )
         )
+
     return images
 
 
-def _extract_image_result(result: dict[str, Any]) -> tuple[str | None, str | None]:
+def _extract_image_data_from_node(
+    *,
+    node: dict[str, Any],
+    inherited_media_type: str | None,
+) -> tuple[str | None, str | None]:
+    if node.get("type") in {"image_generation_call", "output_image", "image", "image_generation"}:
+        for key in ("result", "data", "b64_json", "base64", "base64_data"):
+            value = node.get(key)
+            if isinstance(value, str):
+                normalized = _strip_data_uri(value)
+                if normalized:
+                    media_type = _extract_media_type(node) or inherited_media_type
+                    return normalized, media_type
+
+    image_url_node = node.get("image_url")
+    if isinstance(image_url_node, dict):
+        url = image_url_node.get("url")
+        if isinstance(url, str):
+            normalized = _strip_data_uri(url)
+            if normalized:
+                return normalized, _extract_data_uri_media_type(url) or _extract_media_type(node) or inherited_media_type
+
+    url = node.get("url")
+    if isinstance(url, str):
+        normalized = _strip_data_uri(url)
+        if normalized:
+            return normalized, _extract_data_uri_media_type(url) or _extract_media_type(node) or inherited_media_type
+
+    result = node.get("result")
+    if isinstance(result, dict):
+        nested_data, nested_media_type = _extract_image_data_from_node(
+            node=result,
+            inherited_media_type=_extract_media_type(result) or inherited_media_type,
+        )
+        if nested_data:
+            return nested_data, nested_media_type
+
+    nested_data, nested_media_type = _extract_image_data_from_result(node)
+    if nested_data:
+        return nested_data, nested_media_type
+
+    return None, _extract_media_type(node) or inherited_media_type
+
+
+def _extract_image_data_from_result(
+    result: dict[str, Any],
+) -> tuple[str | None, str | None]:
     for key in ("data", "b64_json", "base64", "base64_data", "result"):
         value = result.get(key)
         if isinstance(value, str):
@@ -460,6 +534,17 @@ def _strip_data_uri(value: str) -> str | None:
     if normalized.startswith("data:") and ";base64," in normalized:
         return normalized.split(";base64,", 1)[1].strip()
     return normalized
+
+
+def _extract_data_uri_media_type(value: str) -> str | None:
+    lower_value = value.strip().lower()
+    if not lower_value.startswith("data:") or ";base64," not in lower_value:
+        return None
+    header, _ = lower_value.split(";base64,", 1)
+    media_type = header.removeprefix("data:")
+    if "/" in media_type:
+        return media_type
+    return None
 
 
 def _extract_incomplete_response_error(payload: dict[str, Any]) -> str | None:
@@ -621,17 +706,6 @@ def _supports_temperature_parameter(profile: ResolvedLlmProviderProfile) -> bool
     if profile.supports_temperature is not None:
         return profile.supports_temperature
     return not profile.resolved_model.strip().casefold().startswith("gpt-5")
-
-
-def _should_retry_image_request_as_text(
-    error: TransformerLlmError,
-    profile: ResolvedLlmProviderProfile,
-) -> bool:
-    if profile.provider.strip().casefold() not in {"openai", "azure_openai"}:
-        return False
-    if error.status_code is None:
-        return "timeout" in error.code.strip().casefold()
-    return error.status_code >= 500 or error.status_code == 408
 
 
 def _resolve_base_url(endpoint_url: str | None, provider: str) -> str:

@@ -317,7 +317,7 @@ class FinalResponseServiceTests(unittest.TestCase):
         self.assertEqual(call_payloads[0], get_settings().final_response_max_output_tokens)
         self.assertEqual(call_payloads[1], min(get_settings().final_response_max_output_tokens * 2, 8000))
 
-    def test_generate_retries_image_request_without_image_when_timed_out(self) -> None:
+    def test_generate_image_request_times_out_without_fallback(self) -> None:
         from app.services.final_response_service import FinalResponseService
 
         service = FinalResponseService()
@@ -344,12 +344,55 @@ class FinalResponseServiceTests(unittest.TestCase):
                         status_code=504,
                     ),
                 )
+
+        with patch.object(service.provider_profiles, "resolve", return_value=profile), patch.object(
+            service.gateway,
+            "invoke",
+            side_effect=_respond,
+        ):
+            with self.assertRaises(FinalResponseProviderError) as exc_info:
+                service.generate(
+                    runtime_config=_runtime_config(provider="openai", model="gpt-5.5"),
+                    transformed_prompt="Generate an image of a dog.",
+                    conversation_history=[],
+                    attachments=[],
+                    intent=FinalResponseIntent(use_web_search=False, use_image_generation=True),
+                )
+
+        self.assertEqual(len(tool_payloads), 1)
+        self.assertIn("image_generation", tool_payloads[0])
+        self.assertIn("Request timed out.", str(exc_info.exception))
+        self.assertEqual(exc_info.exception.status_code, 504)
+
+    def test_generate_image_request_without_returned_image_artifacts_raises(self) -> None:
+        from app.services.final_response_service import FinalResponseService
+
+        service = FinalResponseService()
+        profile = _profile(
+            provider="openai",
+            resolved_model="gpt-5.5",
+            api_family="responses",
+            token_parameter="max_output_tokens",
+            supports_image_generation=True,
+            supports_web_search=False,
+        )
+
+        def _respond(payload) -> tuple[TransformerLlmResponse, None]:
             return (
                 TransformerLlmResponse(
                     provider="openai",
                     model="gpt-5.5",
-                    output_text="Done.",
-                    raw_payload={"output": []},
+                    output_text="Some text output but no image.",
+                    raw_payload={
+                        "output": [
+                            {
+                                "type": "message",
+                                "content": [
+                                    {"type": "output_text", "text": "Some text output but no image."},
+                                ],
+                            }
+                        ]
+                    },
                     usage={},
                 ),
                 None,
@@ -360,18 +403,17 @@ class FinalResponseServiceTests(unittest.TestCase):
             "invoke",
             side_effect=_respond,
         ):
-            result = service.generate(
-                runtime_config=_runtime_config(provider="openai", model="gpt-5.5"),
-                transformed_prompt="Generate an image of a dog.",
-                conversation_history=[],
-                attachments=[],
-                intent=FinalResponseIntent(use_web_search=False, use_image_generation=True),
-            )
+            with self.assertRaises(FinalResponseProviderError) as exc_info:
+                service.generate(
+                    runtime_config=_runtime_config(provider="openai", model="gpt-5.5"),
+                    transformed_prompt="Generate an image of a dog.",
+                    conversation_history=[],
+                    attachments=[],
+                    intent=FinalResponseIntent(use_web_search=False, use_image_generation=True),
+                )
 
-        self.assertEqual(result.text, "Done.")
-        self.assertEqual(len(tool_payloads), 2)
-        self.assertIn("image_generation", tool_payloads[0])
-        self.assertNotIn("image_generation", tool_payloads[1])
+        self.assertEqual(exc_info.exception.status_code, 502)
+        self.assertIn("no image artifacts", str(exc_info.exception))
 
     def test_build_request_uses_profile_resolved_model_and_gateway_fields(self) -> None:
         from app.services.final_response_service import FinalResponseService
@@ -531,6 +573,30 @@ class FinalResponseServiceTests(unittest.TestCase):
         self.assertEqual(len(images), 1)
         self.assertEqual(images[0].media_type, "image/jpeg")
         self.assertEqual(images[0].base64_data, "iVBORw0KGgo=")
+
+    def test_extract_generated_images_parses_nested_message_output(self) -> None:
+        images = _extract_generated_images(
+            {
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [
+                            {"type": "output_text", "text": "Generating image now."},
+                            {
+                                "type": "output_image",
+                                "image_url": {
+                                    "url": "data:image/png;base64,UE5HIGRhdGE="
+                                },
+                            },
+                        ],
+                    }
+                ]
+            }
+        )
+
+        self.assertEqual(len(images), 1)
+        self.assertEqual(images[0].media_type, "image/png")
+        self.assertEqual(images[0].base64_data, "UE5HIGRhdGE=")
 
     def test_rag_prompt_assembly_compresses_and_budgets_reference_context(self) -> None:
         service = RagPromptAssemblyService()

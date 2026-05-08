@@ -211,6 +211,70 @@ class FinalResponseServiceTests(unittest.TestCase):
             _append_max_output_budget("Generate a short summary.", 420),
         )
 
+    def test_append_max_output_budget_updates_existing_directive(self) -> None:
+        initial = _append_max_output_budget("Summarize in one paragraph.", 250)
+        updated = _append_max_output_budget(initial, 500)
+        self.assertEqual(updated.count("Output budget: do not exceed"), 1)
+        self.assertIn("Output budget: do not exceed 500 output tokens.", updated)
+
+    def test_generate_retries_on_max_output_tokens_incomplete_response(self) -> None:
+        from app.services.final_response_service import FinalResponseService
+
+        service = FinalResponseService()
+        profile = _profile(
+            provider="openai",
+            api_family="responses",
+            token_parameter="max_output_tokens",
+            supports_web_search=False,
+        )
+        call_payloads: list[int] = []
+
+        def _respond(payload) -> tuple[TransformerLlmResponse, None]:
+            call_payloads.append(payload.max_output_tokens)
+            if len(call_payloads) == 1:
+                return (
+                    TransformerLlmResponse(
+                        provider="openai",
+                        model="test-model",
+                        output_text="",
+                        raw_payload={
+                            "status": "incomplete",
+                            "incomplete_details": {"reason": "max_output_tokens"},
+                            "output": [],
+                        },
+                        usage={},
+                    ),
+                    None,
+                )
+            return (
+                TransformerLlmResponse(
+                    provider="openai",
+                    model="test-model",
+                    output_text="Done.",
+                    raw_payload={"output": []},
+                    usage={},
+                ),
+                None,
+            )
+
+        with patch.object(service.provider_profiles, "resolve", return_value=profile), patch.object(
+            service.gateway,
+            "invoke",
+            side_effect=_respond,
+        ):
+            result = service.generate(
+                runtime_config=_runtime_config(provider="openai", model="gpt-4.1"),
+                transformed_prompt="Summarize the policy briefly.",
+                conversation_history=[],
+                attachments=[],
+                intent=FinalResponseIntent(use_web_search=False, use_image_generation=False),
+            )
+
+        self.assertEqual(result.text, "Done.")
+        self.assertEqual(len(call_payloads), 2)
+        self.assertEqual(call_payloads[0], get_settings().final_response_max_output_tokens)
+        self.assertEqual(call_payloads[1], min(get_settings().final_response_max_output_tokens * 2, 8000))
+
     def test_build_request_uses_profile_resolved_model_and_gateway_fields(self) -> None:
         from app.services.final_response_service import FinalResponseService
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -66,6 +67,11 @@ OPENAI_IMAGE_GENERATION_MODELS = {
     "gpt-image-1",
 }
 OPENAI_WEB_SEARCH_MIN_OUTPUT_TOKENS = 4000
+_MAX_OUTPUT_TOKENS_HARD_LIMIT = 8000
+_OUTPUT_BUDGET_DIRECTIVE_RE = re.compile(
+    r"\n\nOutput budget:\s*do not exceed\s*\d+\s+output tokens\.",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -132,32 +138,64 @@ class FinalResponseService:
             use_web_search=effective_intent.use_web_search,
             requested_max_output_tokens=runtime_config_output_tokens(runtime_config),
         )
-        final_prompt = _append_max_output_budget(
-            prompt=final_prompt,
-            max_output_tokens=resolved_max_output_tokens,
-        )
-        request = self._build_request(
-            runtime_config=runtime_config,
-            transformed_prompt=final_prompt,
-            conversation_history=conversation_history,
-            attachments=attachments,
-            intent=effective_intent,
-            profile=profile,
-            resolved_max_output_tokens=resolved_max_output_tokens,
-        )
-
-        response, error = self.gateway.invoke(request)
-        if error is not None:
-            raise FinalResponseProviderError(
-                _build_gateway_error_message(error, profile=profile),
-                status_code=_map_gateway_error_status_code(error),
+        prompt_without_budget = final_prompt
+        attempt_count = 0
+        response = None
+        payload: dict[str, Any] = {}
+        resolved_max_output_tokens_local = resolved_max_output_tokens
+        while True:
+            prompt_with_budget = _append_max_output_budget(
+                prompt=prompt_without_budget,
+                max_output_tokens=resolved_max_output_tokens_local,
             )
-        if response is None:
-            raise FinalResponseProviderError("LLM provider returned no response.", status_code=502)
+            request = self._build_request(
+                runtime_config=runtime_config,
+                transformed_prompt=prompt_with_budget,
+                conversation_history=conversation_history,
+                attachments=attachments,
+                intent=effective_intent,
+                profile=profile,
+                resolved_max_output_tokens=resolved_max_output_tokens_local,
+            )
+            response, error = self.gateway.invoke(request)
+            if error is not None:
+                raise FinalResponseProviderError(
+                    _build_gateway_error_message(error, profile=profile),
+                    status_code=_map_gateway_error_status_code(error),
+                )
+            if response is None:
+                raise FinalResponseProviderError("LLM provider returned no response.", status_code=502)
 
-        payload = response.raw_payload if isinstance(response.raw_payload, dict) else {}
-        incomplete_error = _extract_incomplete_response_error(payload)
-        if incomplete_error:
+            payload = response.raw_payload if isinstance(response.raw_payload, dict) else {}
+            incomplete_reason = _extract_incomplete_reason(payload)
+            if incomplete_reason is None:
+                break
+
+            if (
+                _is_max_output_tokens_incomplete_reason(incomplete_reason)
+                and attempt_count < 1
+                and _supports_token_retry(resolved_max_output_tokens_local, _MAX_OUTPUT_TOKENS_HARD_LIMIT)
+            ):
+                attempt_count += 1
+                next_max_output_tokens = _bump_max_output_tokens(
+                    requested_max_output_tokens=resolved_max_output_tokens_local,
+                    hard_limit=_MAX_OUTPUT_TOKENS_HARD_LIMIT,
+                )
+                if next_max_output_tokens > resolved_max_output_tokens_local:
+                    logger.warning(
+                        "LLM response incomplete at token limit; retrying with higher max_output_tokens",
+                        extra={
+                            "provider": profile.provider,
+                            "model": profile.resolved_model,
+                            "attempt": attempt_count,
+                            "previous_max_output_tokens": resolved_max_output_tokens_local,
+                            "next_max_output_tokens": next_max_output_tokens,
+                        },
+                    )
+                    resolved_max_output_tokens_local = next_max_output_tokens
+                    continue
+
+            incomplete_error = _error_for_incomplete_response_reason(incomplete_reason)
             raise ValueError(incomplete_error)
 
         text = response.output_text.strip()
@@ -408,6 +446,13 @@ def _strip_data_uri(value: str) -> str | None:
 
 
 def _extract_incomplete_response_error(payload: dict[str, Any]) -> str | None:
+    reason = _extract_incomplete_reason(payload)
+    if reason is None:
+        return None
+    return _error_for_incomplete_response_reason(reason)
+
+
+def _extract_incomplete_reason(payload: dict[str, Any]) -> str | None:
     status = payload.get("status")
     if status != "incomplete":
         return None
@@ -416,24 +461,53 @@ def _extract_incomplete_response_error(payload: dict[str, Any]) -> str | None:
     if isinstance(incomplete_details, dict):
         reason = incomplete_details.get("reason")
         if isinstance(reason, str) and reason.strip():
-            normalized_reason = reason.strip()
-            normalized_reason_lower = normalized_reason.casefold().replace("-", "_")
-            if normalized_reason_lower in {"max_tokens", "max_output_tokens", "max_output_token"}:
-                return "LLM provider response was incomplete because it hit the max_output_tokens limit."
-            return f"LLM provider response was incomplete: {normalized_reason}."
+            return reason.strip()
+    return "incomplete"
+
+
+def _error_for_incomplete_response_reason(reason: str) -> str:
+    normalized_reason_lower = reason.strip().casefold().replace("-", "_")
+    if normalized_reason_lower in {"max_tokens", "max_output_tokens", "max_output_token"}:
+        return "LLM provider response was incomplete because it hit the max_output_tokens limit."
+    if reason.strip():
+        return f"LLM provider response was incomplete: {reason}."
     return "LLM provider response was incomplete."
+
+
+def _is_max_output_tokens_incomplete_reason(reason: str) -> bool:
+    normalized_reason_lower = reason.strip().casefold().replace("-", "_")
+    return normalized_reason_lower in {"max_tokens", "max_output_tokens", "max_output_token"}
+
+
+def _supports_token_retry(
+    current_max_output_tokens: int,
+    hard_limit: int,
+) -> bool:
+    return current_max_output_tokens < hard_limit
+
+
+def _bump_max_output_tokens(*, requested_max_output_tokens: int, hard_limit: int) -> int:
+    if requested_max_output_tokens >= hard_limit:
+        return requested_max_output_tokens
+
+    next_tokens = requested_max_output_tokens * 2
+    if next_tokens <= requested_max_output_tokens:
+        next_tokens = requested_max_output_tokens + 1000
+    return min(next_tokens, hard_limit)
 
 
 def _append_max_output_budget(prompt: str, max_output_tokens: int) -> str:
     cleaned_prompt = prompt.strip()
     if max_output_tokens <= 0:
         return cleaned_prompt
+    if max_output_tokens > _MAX_OUTPUT_TOKENS_HARD_LIMIT:
+        max_output_tokens = _MAX_OUTPUT_TOKENS_HARD_LIMIT
 
     directive = (
         f"\n\nOutput budget: do not exceed {max_output_tokens} output tokens."
     )
-    if "output tokens" in cleaned_prompt.casefold():
-        return cleaned_prompt
+    if _OUTPUT_BUDGET_DIRECTIVE_RE.search(cleaned_prompt):
+        return _OUTPUT_BUDGET_DIRECTIVE_RE.sub(directive, cleaned_prompt)
     return cleaned_prompt + directive
 
 

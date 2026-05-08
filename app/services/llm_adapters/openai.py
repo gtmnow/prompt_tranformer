@@ -245,7 +245,7 @@ class OpenAIAdapter(BaseLlmAdapter):
                         text = part.get("text")
                         if isinstance(text, str) and text.strip():
                             return text.strip()
-        raise ValueError("Responses API returned no output text")
+        return ""
 
     def _extract_finish_reason(self, profile: ResolvedLlmProviderProfile, payload: dict[str, Any]) -> str | None:
         if profile.api_family == "chat_completions":

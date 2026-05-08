@@ -90,3 +90,38 @@ def test_openai_adapter_uses_structured_input_over_prompt_fields() -> None:
     assert payload["input"] == request.input_items
     assert payload["tools"] == [{"type": "web_search"}]
     assert payload["text"] == {"format": {"type": "text"}}
+
+
+def test_openai_adapter_allows_image_generation_responses_without_text() -> None:
+    adapter = OpenAIAdapter()
+    profile = ResolvedLlmProviderProfile(
+        provider="openai",
+        requested_model="gpt-5.5",
+        resolved_model="gpt-5.5",
+        api_family="responses",
+        endpoint_path="/responses",
+        auth_scheme="bearer",
+        auth_header_name=None,
+        version_header_name=None,
+        version_header_value=None,
+        json_mode="prompt_only",
+        token_parameter="max_output_tokens",
+        supports_system_prompt=True,
+        request_timeout_seconds=15.0,
+        supports_image_generation=True,
+        raw={},
+    )
+
+    payload = adapter._extract_output_text(  # type: ignore[attr-defined]
+        profile=profile,
+        payload={
+            "output": [
+                {
+                    "type": "image_generation_call",
+                    "result": "iVBORw0KGgo=",
+                }
+            ]
+        },
+    )
+
+    assert payload == ""

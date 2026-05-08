@@ -140,9 +140,11 @@ class FinalResponseService:
         )
         prompt_without_budget = final_prompt
         attempt_count = 0
+        image_generation_attempted = False
         response = None
         payload: dict[str, Any] = {}
         resolved_max_output_tokens_local = resolved_max_output_tokens
+        current_intent = effective_intent
         while True:
             prompt_with_budget = _append_max_output_budget(
                 prompt=prompt_without_budget,
@@ -153,12 +155,27 @@ class FinalResponseService:
                 transformed_prompt=prompt_with_budget,
                 conversation_history=conversation_history,
                 attachments=attachments,
-                intent=effective_intent,
+                intent=current_intent,
                 profile=profile,
                 resolved_max_output_tokens=resolved_max_output_tokens_local,
             )
             response, error = self.gateway.invoke(request)
             if error is not None:
+                if (
+                    current_intent.use_image_generation
+                    and not image_generation_attempted
+                    and _should_retry_image_request_as_text(error, profile)
+                ):
+                    image_generation_attempted = True
+                    current_intent = FinalResponseIntent(
+                        use_web_search=current_intent.use_web_search,
+                        use_image_generation=False,
+                    )
+                    logger.warning(
+                        "Image generation request timed out for model %s; retrying as text-only request.",
+                        profile.resolved_model,
+                    )
+                    continue
                 raise FinalResponseProviderError(
                     _build_gateway_error_message(error, profile=profile),
                     status_code=_map_gateway_error_status_code(error),
@@ -604,6 +621,17 @@ def _supports_temperature_parameter(profile: ResolvedLlmProviderProfile) -> bool
     if profile.supports_temperature is not None:
         return profile.supports_temperature
     return not profile.resolved_model.strip().casefold().startswith("gpt-5")
+
+
+def _should_retry_image_request_as_text(
+    error: TransformerLlmError,
+    profile: ResolvedLlmProviderProfile,
+) -> bool:
+    if profile.provider.strip().casefold() not in {"openai", "azure_openai"}:
+        return False
+    if error.status_code is None:
+        return "timeout" in error.code.strip().casefold()
+    return error.status_code >= 500 or error.status_code == 408
 
 
 def _resolve_base_url(endpoint_url: str | None, provider: str) -> str:

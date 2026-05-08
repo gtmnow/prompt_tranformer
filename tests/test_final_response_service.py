@@ -20,7 +20,7 @@ from app.services.llm_provider_profiles import LlmProviderProfileService
 from app.services.rag_prompt_assembly_service import RagPromptAssemblyService
 from app.core.config import get_settings
 from app.services.runtime_llm import RuntimeLlmConfig
-from app.services.llm_types import TransformerLlmResponse
+from app.services.llm_types import TransformerLlmError, TransformerLlmResponse
 
 
 def _profile(
@@ -316,6 +316,62 @@ class FinalResponseServiceTests(unittest.TestCase):
         self.assertEqual(len(call_payloads), 2)
         self.assertEqual(call_payloads[0], get_settings().final_response_max_output_tokens)
         self.assertEqual(call_payloads[1], min(get_settings().final_response_max_output_tokens * 2, 8000))
+
+    def test_generate_retries_image_request_without_image_when_timed_out(self) -> None:
+        from app.services.final_response_service import FinalResponseService
+
+        service = FinalResponseService()
+        profile = _profile(
+            provider="openai",
+            resolved_model="gpt-5.5",
+            api_family="responses",
+            token_parameter="max_output_tokens",
+            supports_image_generation=True,
+            supports_web_search=False,
+        )
+        tool_payloads: list[list[str]] = []
+
+        def _respond(payload) -> tuple[TransformerLlmResponse, TransformerLlmError | None]:
+            tool_payloads.append(sorted(tool.get("type") for tool in payload.tools))
+            if any(tool.get("type") == "image_generation" for tool in payload.tools):
+                return (
+                    None,
+                    TransformerLlmError(
+                        provider="openai",
+                        model="gpt-5.5",
+                        code="TIMEOUT",
+                        message="Request timed out.",
+                        status_code=504,
+                    ),
+                )
+            return (
+                TransformerLlmResponse(
+                    provider="openai",
+                    model="gpt-5.5",
+                    output_text="Done.",
+                    raw_payload={"output": []},
+                    usage={},
+                ),
+                None,
+            )
+
+        with patch.object(service.provider_profiles, "resolve", return_value=profile), patch.object(
+            service.gateway,
+            "invoke",
+            side_effect=_respond,
+        ):
+            result = service.generate(
+                runtime_config=_runtime_config(provider="openai", model="gpt-5.5"),
+                transformed_prompt="Generate an image of a dog.",
+                conversation_history=[],
+                attachments=[],
+                intent=FinalResponseIntent(use_web_search=False, use_image_generation=True),
+            )
+
+        self.assertEqual(result.text, "Done.")
+        self.assertEqual(len(tool_payloads), 2)
+        self.assertIn("image_generation", tool_payloads[0])
+        self.assertNotIn("image_generation", tool_payloads[1])
 
     def test_build_request_uses_profile_resolved_model_and_gateway_fields(self) -> None:
         from app.services.final_response_service import FinalResponseService
